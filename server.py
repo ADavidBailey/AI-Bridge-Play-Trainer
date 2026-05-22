@@ -29,7 +29,19 @@ APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("BRIDGE_DATA_ROOT", "/Users/adavidbailey/Practice-Bidding-Scenarios"))
 REPO_ROOT = DATA_ROOT
 BBA_DIR = DATA_ROOT / "bba"
+COACHING_DIR = DATA_ROOT / "coaching"
 STATIC_DIR = APP_DIR / "static"
+
+
+def _scenario_pbn_path(scenario: str) -> Path | None:
+    """Return the coaching/ file if it exists, else fall back to bba/."""
+    coached = COACHING_DIR / f"{scenario}.pbn"
+    if coached.exists():
+        return coached
+    raw = BBA_DIR / f"{scenario}.pbn"
+    if raw.exists():
+        return raw
+    return None
 
 SEAT_LETTER = {Player.north: "N", Player.east: "E", Player.south: "S", Player.west: "W"}
 LETTER_SEAT = {v: k for k, v in SEAT_LETTER.items()}
@@ -172,7 +184,17 @@ def _strip_post_auction_blocks(text: str) -> str:
             pos = tail_start
             continue
         out.append(text[tail_start:open_pos])
-        pos = close_pos + 1
+        end_pos = close_pos + 1
+        # If the block sits on its own line (Baker-Bridge style — newline
+        # before `{`), consume one trailing newline after `}` so the strip
+        # collapses cleanly. Without this, endplay sees a blank line and
+        # terminates the board early. If `{` was inline with the auction
+        # (no preceding newline), keep the trailing newline as the separator
+        # between auction calls and the next `[Tag]`.
+        preceded_by_newline = open_pos > 0 and text[open_pos - 1] == "\n"
+        if preceded_by_newline and end_pos < len(text) and text[end_pos] == "\n":
+            end_pos += 1
+        pos = end_pos
     out.append(text[pos:])
     return "".join(out)
 
@@ -246,16 +268,24 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
     if intro_text or intro_reveals:
         chunks.append({"bid_index": None, "reveals": intro_reveals, "text": intro_text})
 
+    def _norm_call(s: str) -> str:
+        # Treat [BID 1N] and [BID 1NT] as the same call so authors don't have
+        # to know which spelling the auction normaliser uses.
+        s = s.strip().upper()
+        if re.fullmatch(r"\d+N", s):
+            s += "T"
+        return s
+
     used: set[int] = set()
     for i in range(1, len(parts), 2):
-        bid_name = parts[i].strip().upper()
+        bid_name = _norm_call(parts[i])
         prose = parts[i + 1] if i + 1 < len(parts) else ""
         reveals, text = _extract_reveals(prose)
         bid_idx = None
         for j, call in enumerate(auction_pbn_calls):
             if j in used:
                 continue
-            if call.upper() == bid_name:
+            if _norm_call(call) == bid_name:
                 bid_idx = j
                 break
         if bid_idx is None:
@@ -693,8 +723,8 @@ class StartSessionBody(BaseModel):
 
 @app.post("/api/session")
 def start_session(body: StartSessionBody):
-    path = BBA_DIR / f"{body.scenario}.pbn"
-    if not path.exists():
+    path = _scenario_pbn_path(body.scenario)
+    if path is None:
         raise HTTPException(404, f"scenario not found: {body.scenario}")
     raw_text = path.read_text()
     # endplay's PBN parser chokes on inline {...} prose blocks after [Auction]
