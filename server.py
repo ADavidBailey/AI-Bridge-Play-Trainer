@@ -9,6 +9,8 @@ Then open http://localhost:8765/ in your browser.
 Declarer mode only for the MVP. Defender mode + Claude grading come next.
 """
 
+import io
+import re
 import secrets
 from pathlib import Path
 
@@ -21,9 +23,13 @@ from endplay.types import Player, Denom, Rank, Deal, Contract, Vul, Penalty
 from endplay.dds import solve_board, calc_dd_table
 from endplay.parsers import pbn
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-BBA_DIR = REPO_ROOT / "bba"
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+import os
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_ROOT = Path(os.environ.get("BRIDGE_DATA_ROOT", "/Users/adavidbailey/Practice-Bidding-Scenarios"))
+REPO_ROOT = DATA_ROOT
+BBA_DIR = DATA_ROOT / "bba"
+STATIC_DIR = APP_DIR / "static"
 
 SEAT_LETTER = {Player.north: "N", Player.east: "E", Player.south: "S", Player.west: "W"}
 LETTER_SEAT = {v: k for k, v in SEAT_LETTER.items()}
@@ -142,6 +148,132 @@ def _hand_to_pbn(h):
                     for suit in (h.spades, h.hearts, h.diamonds, h.clubs))
 
 
+# ---------- coaching prose (Baker-Bridge format) ----------
+
+def _strip_post_auction_blocks(text: str) -> str:
+    """For each board, drop the first {...} block that follows [Auction "..."].
+    Leaves pre-auction comment blocks ({Shape ...} etc.) intact so endplay
+    doesn't see new blank lines and treat them as board terminators."""
+    out = []
+    pos = 0
+    pattern = re.compile(r'\[Auction\s+"[^"]*"\]')
+    for m in pattern.finditer(text):
+        out.append(text[pos:m.end()])
+        tail_start = m.end()
+        # Find the first { that follows; stop searching if we hit the next
+        # [Event tag (start of a new board) first.
+        next_event = text.find('\n[Event ', tail_start)
+        open_pos = text.find('{', tail_start)
+        if open_pos == -1 or (next_event != -1 and open_pos > next_event):
+            pos = tail_start
+            continue
+        close_pos = text.find('}', open_pos)
+        if close_pos == -1:
+            pos = tail_start
+            continue
+        out.append(text[tail_start:open_pos])
+        pos = close_pos + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _split_pbn_by_board(text: str) -> list[str]:
+    """Split raw PBN text by [Event "..."] markers (each board starts there).
+    Returns the per-board slices in source order. A file preamble before the
+    first [Event tag is dropped — only slices that begin with [Event are kept."""
+    parts = re.split(r'(?=^\[Event\s+")', text, flags=re.MULTILINE)
+    return [p for p in parts if p.lstrip().startswith("[Event")]
+
+
+def _auction_pbn_calls(auction) -> list[str]:
+    """Render an auction as PBN-style call strings (1C, 2D, 3NT, X, XX, Pass)."""
+    out = []
+    for call in auction:
+        if hasattr(call, "denom"):
+            if call.denom == Denom.nt:
+                out.append(f"{call.level}NT")
+            else:
+                out.append(f"{call.level}{DENOM_LETTER[call.denom]}")
+        else:
+            penalty = getattr(call, "penalty", None)
+            pn = getattr(penalty, "name", None) if penalty is not None else None
+            out.append({"passed": "Pass", "doubled": "X", "redoubled": "XX"}.get(pn, "Pass"))
+    return out
+
+
+_SHOW_RE = re.compile(r'\[show\s+([^\]]+)\]', re.IGNORECASE)
+_BID_RE = re.compile(r'\[BID\s+([^\]]+)\]', re.IGNORECASE)
+
+
+def _extract_reveals(prose: str) -> tuple[list[str], str]:
+    reveals = []
+    def collect(m):
+        reveals.append(m.group(1).strip())
+        return ""
+    cleaned = _SHOW_RE.sub(collect, prose)
+    cleaned = re.sub(r'[ \t]+\n', '\n', cleaned).strip()
+    return reveals, cleaned
+
+
+def _substitute_suits(text: str) -> str:
+    return (text.replace("\\S", "♠").replace("\\H", "♥")
+                .replace("\\D", "♦").replace("\\C", "♣"))
+
+
+def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict] | None:
+    """Parse the post-auction { ... } coaching block out of a single board's
+    raw PBN text. Returns None if no such block exists; otherwise an ordered
+    list of {"bid_index": int|None, "reveals": list[str], "text": str}.
+
+    Pre-auction `{Shape ...} {HCP ...} {Losers ...}` comment-style tags from
+    the existing bba files are ignored — we only look at the slice AFTER the
+    [Auction "..."] tag."""
+    auction_match = re.search(r'\[Auction\s+"[^"]*"\]', raw_pbn_text)
+    if not auction_match:
+        return None
+    tail = raw_pbn_text[auction_match.end():]
+    open_pos = tail.find('{')
+    if open_pos == -1:
+        return None
+    close_pos = tail.find('}', open_pos)
+    if close_pos == -1:
+        return None
+    body = _substitute_suits(tail[open_pos + 1:close_pos])
+
+    parts = _BID_RE.split(body)
+    chunks: list[dict] = []
+    intro_reveals, intro_text = _extract_reveals(parts[0])
+    if intro_text or intro_reveals:
+        chunks.append({"bid_index": None, "reveals": intro_reveals, "text": intro_text})
+
+    used: set[int] = set()
+    for i in range(1, len(parts), 2):
+        bid_name = parts[i].strip().upper()
+        prose = parts[i + 1] if i + 1 < len(parts) else ""
+        reveals, text = _extract_reveals(prose)
+        bid_idx = None
+        for j, call in enumerate(auction_pbn_calls):
+            if j in used:
+                continue
+            if call.upper() == bid_name:
+                bid_idx = j
+                break
+        if bid_idx is None:
+            # Degrade to the previous successfully-anchored chunk so the prose
+            # still surfaces. If there's no previous chunk, fall back to intro.
+            if chunks:
+                merged = (chunks[-1]["text"] + "\n\n" + text).strip() if text else chunks[-1]["text"]
+                chunks[-1]["text"] = merged
+                chunks[-1]["reveals"].extend(reveals)
+            else:
+                chunks.append({"bid_index": None, "reveals": reveals, "text": text})
+        else:
+            used.add(bid_idx)
+            chunks.append({"bid_index": bid_idx, "reveals": reveals, "text": text})
+
+    return chunks if chunks else None
+
+
 # ---------- session state ----------
 
 class Session:
@@ -189,6 +321,10 @@ class Session:
         self.ns_tricks = 0
         self.ew_tricks = 0
         self.complete = False
+        # Set by start_session after parsing the PBN's post-auction prose block.
+        # None means the scenario file has no embedded tutorial — frontend then
+        # uses the existing instant-reveal path.
+        self.coaching: list[dict] | None = None
         # Full log of cards played, in chronological order. We rebuild deal
         # state from scratch when undoing, since endplay's unplay() can't
         # cross trick boundaries.
@@ -340,6 +476,17 @@ class Session:
         st["contract_str"] = f"{self.level}{DENOM_SYM[self.trump]} by {SEAT_LETTER[self.declarer]}"
         st["board_num"] = self.board.board_num
         st["scenario"] = self.board.info.get("Event", "?")
+        # Coaching chunks stay in the author's real-compass frame; the
+        # frontend uses rotation_shift to map [show N] → display seat.
+        st["coaching"] = self.coaching
+        st["rotation_shift"] = self._rotation_shift
+        # All four initial hands — only consulted by the frontend during the
+        # tutorial phase, where the [show X] directives need to reveal hands
+        # the server's visible_hands() would otherwise hide.
+        st["initial_hands"] = {
+            SEAT_LETTER[p]: hand_to_dict(self.initial_hands[p])
+            for p in (Player.north, Player.east, Player.south, Player.west)
+        }
         return self._rotate_state_for_user(st)
 
     def _rotate_state_for_user(self, st):
@@ -356,6 +503,8 @@ class Session:
 
         st["hands"] = rotate_keys(st["hands"])
         st["cards_played_by_seat"] = rotate_keys(st["cards_played_by_seat"])
+        if "initial_hands" in st:
+            st["initial_hands"] = rotate_keys(st["initial_hands"])
 
         for play in st.get("current_trick", []):
             play["seat"] = R(play["seat"])
@@ -547,8 +696,15 @@ def start_session(body: StartSessionBody):
     path = BBA_DIR / f"{body.scenario}.pbn"
     if not path.exists():
         raise HTTPException(404, f"scenario not found: {body.scenario}")
-    with open(path) as f:
-        boards = list(pbn.load(f))
+    raw_text = path.read_text()
+    # endplay's PBN parser chokes on inline {...} prose blocks after [Auction]
+    # — it tries to parse "{[show" as a bid call. Strip those post-auction
+    # blocks before handing off to endplay. We leave pre-auction comments
+    # (e.g. {Shape ...} {HCP ...} {Losers ...} between [Deal] and [Declarer]
+    # in the existing bba files) alone — replacing them with empty strings
+    # introduces blank lines that endplay would treat as board terminators.
+    endplay_text = _strip_post_auction_blocks(raw_text)
+    boards = list(pbn.load(io.StringIO(endplay_text)))
     if not boards:
         raise HTTPException(500, "scenario has no deals")
     idx = body.board_index % len(boards)
@@ -556,6 +712,11 @@ def start_session(body: StartSessionBody):
         sess = Session(boards[idx], role=body.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    board_slices = _split_pbn_by_board(raw_text)
+    if idx < len(board_slices):
+        sess.coaching = parse_coaching(
+            board_slices[idx], _auction_pbn_calls(boards[idx].auction)
+        )
     # NOTE: deliberately NOT calling sess.auto_play_until_user() here. The
     # client calls /start-play once the user clicks the Play button so any
     # end-of-auction coaching has a chance to fire while cards_played_count
@@ -572,91 +733,6 @@ def get_state(sid: str):
     if sess is None:
         raise HTTPException(404, "session not found")
     return {"state": sess.state()}
-
-
-def _ground_truth_payload(sess):
-    """Pure helper version of the /ground-truth endpoint body — needed by
-    /preview-after-lead too. Returns dict suitable for JSON response."""
-    R = sess._rl
-    declarer_d = R(SEAT_LETTER[sess.declarer])
-    dummy_d = R(SEAT_LETTER[sess.dummy])
-    user_d = "S"
-    partner_d = "N"
-    # Play-state-aware: before opening lead, defenders cannot see dummy.
-    pre_lead = sess.cards_played_count == 0
-    if sess.role == "declarer":
-        if pre_lead:
-            # Auction just ended; opening lead not yet played, so dummy is
-            # still face-down even for declarer.
-            hidden_seats_d = [dummy_d, "E", "W"]
-            hidden_labels = [f"dummy ({dummy_d}, face-down)"] + \
-                            [f"defender ({s})" for s in ("E", "W")]
-            role_desc = (f"Student is declarer ({user_d}). Dummy is {dummy_d} "
-                         f"(still face-down — opening lead not yet played).")
-        else:
-            hidden_seats_d = ["E", "W"]
-            hidden_labels = [f"defender ({s})" for s in hidden_seats_d]
-            role_desc = f"Student is declarer ({user_d}). Dummy is {dummy_d}."
-    elif pre_lead:
-        # Defender on or before opening lead: dummy is still face-down.
-        hidden_seats_d = [declarer_d, dummy_d, partner_d]
-        hidden_labels = [
-            f"declarer ({declarer_d})",
-            f"dummy ({dummy_d}, face-down)",
-            f"partner ({partner_d})",
-        ]
-        on_lead = R(SEAT_LETTER[sess.leader]) == user_d
-        lead_status = "on opening lead" if on_lead else "awaiting opening lead from partner"
-        role_desc = (
-            f"Student is defender ({user_d}), {lead_status}. "
-            f"Partner is {partner_d}. Declarer is {declarer_d}, dummy is {dummy_d} (still face-down)."
-        )
-    else:
-        hidden_seats_d = [declarer_d, partner_d]
-        hidden_labels = [f"declarer ({declarer_d})", f"partner ({partner_d})"]
-        role_desc = (f"Student is defender ({user_d}). Partner is {partner_d}. "
-                     f"Declarer is {declarer_d}, dummy is {dummy_d}.")
-    return {
-        "role_desc": role_desc,
-        "hidden_seats": hidden_seats_d,
-        "hidden_labels": hidden_labels,
-        "initial_hands": {R(SEAT_LETTER[p]): hand_to_dict(sess.initial_hands[p])
-                          for p in (Player.north, Player.east, Player.south, Player.west)},
-    }
-
-
-@app.get("/api/session/{sid}/ground-truth")
-def ground_truth(sid: str):
-    """Initial hands and role metadata in the user's South-at-bottom frame."""
-    sess = SESSIONS.get(sid)
-    if sess is None:
-        raise HTTPException(404, "session not found")
-    return _ground_truth_payload(sess)
-
-
-@app.get("/api/session/{sid}/preview-after-lead")
-def preview_after_lead(sid: str):
-    """Speculatively play the DDS opening lead, return the resulting state +
-    ground truth (as if the lead had been made), then REVERT so the live
-    session is unchanged. Lets the client pre-warm the after-lead coaching
-    call while the user is still reviewing the auction overlay.
-
-    Returns {"applicable": false} when the prefetch doesn't make sense:
-    cards already played, deal complete, or the user is on lead (then we
-    can't predict the card)."""
-    sess = SESSIONS.get(sid)
-    if sess is None:
-        raise HTTPException(404, "session not found")
-    if sess.cards_played_count > 0 or sess.complete:
-        return {"applicable": False, "reason": "play already started"}
-    if sess.leader in sess.user_seats:
-        return {"applicable": False, "reason": "user is on lead"}
-    card = dds_pick(sess.deal)
-    sess._play_card(card)
-    state = sess.state()
-    gt = _ground_truth_payload(sess)
-    sess._rebuild_to(0)
-    return {"applicable": True, "state": state, "ground_truth": gt}
 
 
 class PlayBody(BaseModel):

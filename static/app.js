@@ -1,6 +1,7 @@
 "use strict";
 
 const SEATS = ["N", "E", "S", "W"];
+const SEAT_INDEX = { N: 0, E: 1, S: 2, W: 3 };
 const SUIT_SYMBOL = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAME = { S: "Spades", H: "Hearts", D: "Diamonds", C: "Clubs" };
 const RED_SUITS = new Set(["H", "D"]);
@@ -16,13 +17,17 @@ let awaitingPlay = false;           // auction is fully revealed; waiting for th
 
 let reviewingAuction = false;       // user is holding the Review button
 
-function bidsInCenter() { return auctionAnimating || awaitingPlay || reviewingAuction; }
+// Tutorial state — populated when state.coaching is non-null. Reveals are in
+// the author's REAL-compass frame; applyTutorialMask maps to display seats.
+let tutorialReveals = new Set();    // Set<"N"|"E"|"S"|"W"> in real-compass frame
+let tutorialContinueResolve = null; // resolved by the Continue button
+
 const TRICK_HOLD_MS = 3000;
-const AUCTION_CALL_MS = 1300;       // substantive bids
-const AUCTION_PASS_MS = 700;        // passes/doubles go faster, like at a real table
 const playedVisible = { N: false, E: false, S: false, W: false };
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function bidsInCenter() { return auctionAnimating || awaitingPlay || reviewingAuction; }
 
 function togglePlayed(seatLetter) {
   playedVisible[seatLetter] = !playedVisible[seatLetter];
@@ -64,6 +69,44 @@ async function api(path, opts = {}) {
     throw new Error(`${res.status}: ${text}`);
   }
   return res.json();
+}
+
+// ---------- tutorial masking ----------
+
+// Map an author's real-compass seat letter to its display seat letter,
+// using the per-session rotation_shift the server hands us.
+function realToDisplaySeat(realLetter, shift) {
+  const realIdx = SEAT_INDEX[realLetter];
+  if (realIdx === undefined) return null;
+  return SEATS[(realIdx + shift) % 4];
+}
+
+// Expand reveal tokens like "N", "NS", "NSEW" into individual seat letters.
+function expandRevealToken(tok) {
+  const seats = [];
+  for (const ch of String(tok).toUpperCase()) {
+    if (ch in SEAT_INDEX) seats.push(ch);
+  }
+  return seats;
+}
+
+// During the tutorial phase, replace state.hands with the [show]-filtered
+// initial layout — the server's visible_hands() would hide non-declarer
+// seats pre-lead, but the tutorial may want to reveal whichever side the
+// author called out. After startPlay clears tutorialReveals this is a
+// no-op; server visibility rules take over.
+function applyTutorialMask(state) {
+  if (tutorialReveals.size === 0) return;
+  const shift = state.rotation_shift || 0;
+  const visibleDisplay = new Set();
+  for (const real of tutorialReveals) {
+    const disp = realToDisplaySeat(real, shift);
+    if (disp) visibleDisplay.add(disp);
+  }
+  const source = state.initial_hands || state.hands;
+  for (const seat of SEATS) {
+    state.hands[seat] = visibleDisplay.has(seat) ? source[seat] : null;
+  }
 }
 
 // ---------- rendering ----------
@@ -178,9 +221,8 @@ function fillAuctionGrid(grid, state, opts = {}) {
 }
 
 function renderAuction(state) {
-  // The right-side auction panel is gone; the bidding box in the centre shows
-  // the auction during animation and is dismissed when the user clicks Play.
-  // Nothing to render here outside of that.
+  // The auction is drawn into the centre of the table by renderTable when
+  // bidsInCenter() — nothing to render outside of that.
 }
 
 function userSideLabel(state) {
@@ -245,9 +287,6 @@ function renderContractDisplay(state) {
   box.appendChild(el("div", { class: "contract-line-sub" }, `Dealer: ${state.dealer}`));
 }
 
-// Map of compass seats to UI slot positions. The user's seat goes at the
-// bottom, partner at top, LHO at left, RHO at right. Play visually goes
-// clockwise: bottom → left → top → right.
 const SEAT_ORDER = ["N", "E", "S", "W"];
 function seatOffset(seat) { return SEAT_ORDER.indexOf(seat); }
 function partnerOf(seat) { return SEAT_ORDER[(seatOffset(seat) + 2) % 4]; }
@@ -361,7 +400,6 @@ function renderTable(state) {
       sub.appendChild(el("div", {}, `Tricks: NS ${ns} · EW ${ew}`));
       sub.appendChild(el("div", {}, `Score: ${sign(r.score)}`));
       sub.appendChild(el("div", {}, `IMPs vs DD: ${sign(r.imps_vs_dd)} (DD ${r.dd_tricks})`));
-      if (dealCost > 0) sub.appendChild(el("div", {}, `Claude: ${formatUSD(dealCost)}`));
       center.appendChild(sub);
     }
     return;
@@ -391,15 +429,15 @@ function renderTrickSummary(state) {
 }
 
 function renderResult(state) {
-  // Result is now drawn into the center of the table by renderTable, and the
-  // four hands appear in their seat slots by renderSeatInto. The bottom panel
-  // stays hidden.
+  // Result is drawn into the centre of the table by renderTable; the bottom
+  // panel stays hidden.
   document.getElementById("result-panel").hidden = true;
 }
 
 function render(state) {
   lastState = state;
   bumpImpsIfNeeded(state);
+  applyTutorialMask(state);
   document.getElementById("status-line").textContent =
     `${state.scenario} · Deal ${state.board_num} · ${state.contract_str}`;
   document.getElementById("game").hidden = false;
@@ -411,7 +449,7 @@ function render(state) {
   renderTricksStrip(state);
   renderTrickSummary(state);
   renderResult(state);
-  updateInferenceUI(state);
+  renderCoachingPanel();
 }
 
 // ---------- actions ----------
@@ -488,18 +526,11 @@ async function startSession() {
     if (data.board_index != null) {
       document.getElementById("board-index").value = String(data.board_index);
     }
-    groundTruth = null;
-    inferenceHandledForTrick = -1;
-    inferenceOpenedManually = false;
-    coachingFiredTriggers = new Set();
     coachingTips = [];
-    coachingPending = false;
-    dealCost = 0;
-    prefetchedAfterLeadPromise = null;
+    tutorialReveals = new Set();
+    tutorialContinueResolve = null;
     document.getElementById("inference-panel").hidden = true;
-    document.getElementById("feedback-panel").hidden = true;
     document.getElementById("result-panel").hidden = true;
-    syncSidebarVisibility();
     document.getElementById("next-deal-btn").disabled = false;
     document.getElementById("claim-btn").disabled = false;
     document.getElementById("replay-btn").disabled = false;
@@ -576,48 +607,117 @@ async function claimRest() {
   }
 }
 
-function animateAuction(state) {
-  // No timed reveal — show the full auction immediately in the centre of the
-  // table and wait for the user to click Play.
+// ---------- auction animation + tutorial ----------
+
+// Reveal the auction with optional bid-by-bid pauses for coaching prose.
+// - Non-coached scenarios (state.coaching === null): show the full auction
+//   immediately and wait for the user to click Play. Same as before.
+// - Coached scenarios: walk through bids one at a time, pausing for the
+//   anchored coaching chunk (if any). The intro chunk fires first.
+async function animateAuction(state) {
   auctionAnimationToken += 1;
+  const myToken = auctionAnimationToken;
+  // If a previous deal's loop is parked on a Continue promise, unblock it so
+  // it can wake up, see the token mismatch, and exit cleanly.
+  if (tutorialContinueResolve) {
+    const r = tutorialContinueResolve;
+    tutorialContinueResolve = null;
+    r();
+  }
+
+  if (!state.coaching || state.coaching.length === 0) {
+    auctionAnimating = false;
+    auctionVisibleCount = null;
+    awaitingPlay = (state.auction || []).length > 0;
+    render(lastState);
+    return;
+  }
+
+  // Bid-by-bid mode. Group coaching chunks by bid_index for fast lookup.
+  const chunkByBid = new Map();
+  const introChunks = [];
+  for (const ch of state.coaching) {
+    if (ch.bid_index === null || ch.bid_index === undefined) introChunks.push(ch);
+    else {
+      if (!chunkByBid.has(ch.bid_index)) chunkByBid.set(ch.bid_index, []);
+      chunkByBid.get(ch.bid_index).push(ch);
+    }
+  }
+
+  auctionAnimating = true;
+  auctionVisibleCount = 0;
+  render(lastState);
+
+  // Intro chunk(s): show before the auction starts.
+  for (const ch of introChunks) {
+    if (myToken !== auctionAnimationToken) return;
+    await presentChunk(ch);
+  }
+
+  const totalCalls = (state.auction || []).length;
+  for (let i = 0; i < totalCalls; i++) {
+    if (myToken !== auctionAnimationToken) return;
+    auctionVisibleCount = i + 1;
+    render(lastState);
+    const chunks = chunkByBid.get(i);
+    if (chunks) {
+      for (const ch of chunks) {
+        if (myToken !== auctionAnimationToken) return;
+        await presentChunk(ch);
+      }
+    }
+  }
+
+  if (myToken !== auctionAnimationToken) return;
   auctionAnimating = false;
   auctionVisibleCount = null;
-  awaitingPlay = (state.auction || []).length > 0;
+  awaitingPlay = totalCalls > 0;
   render(lastState);
-  // Warm up the after-lead coaching call while the user is reviewing the
-  // auction overlay. Saves the user the 5-10s Claude latency after they
-  // click Play (assuming they spend at least a few seconds on the auction).
-  prefetchAfterLeadTip();
 }
 
-async function prefetchAfterLeadTip() {
-  if (!sessionId) return;
-  if (!isCoaching() || !gradingEnabled() || !gradingKey()) return;
-  if (prefetchedAfterLeadPromise) return;  // already in flight
-  try {
-    const preview = await api(`/api/session/${sessionId}/preview-after-lead`);
-    if (!preview.applicable) return;
-    // Fire the Claude call NOW using the predicted post-lead state. The
-    // promise is awaited later by runCoachingTip when openingLead fires.
-    const payload = buildCoachingPayload(preview.state, "openingLead", preview.ground_truth);
-    prefetchedAfterLeadPromise = callClaudeCoach(COACH_AFTER_LEAD_TPR_PROMPT, payload);
-    // Swallow rejection on the prefetch itself so it doesn't surface as
-    // an unhandled rejection; the same call will be retried (and the error
-    // shown to the user) in runCoachingTip.
-    prefetchedAfterLeadPromise.catch(() => {});
-  } catch (e) {
-    console.warn("after-lead prefetch failed:", e);
+// Push a coaching chunk's text into the panel, merge its [show] reveals,
+// re-render to update the mask, and pause until the user clicks Continue.
+async function presentChunk(chunk) {
+  if (chunk.text) {
+    coachingTips.push({ text: chunk.text });
   }
+  for (const tok of (chunk.reveals || [])) {
+    for (const seat of expandRevealToken(tok)) {
+      tutorialReveals.add(seat);
+    }
+  }
+  if (lastState) render(lastState);
+  await waitForContinue();
+}
+
+function waitForContinue() {
+  return new Promise(resolve => {
+    tutorialContinueResolve = resolve;
+    renderCoachingPanel();
+  });
+}
+
+function onContinueClick() {
+  const r = tutorialContinueResolve;
+  tutorialContinueResolve = null;
+  if (r) r();
 }
 
 async function startPlay() {
+  // Skip past any tutorial pause that's still up, then close the auction
+  // overlay so play can begin.
+  if (tutorialContinueResolve) {
+    const r = tutorialContinueResolve;
+    tutorialContinueResolve = null;
+    r();
+  }
   awaitingPlay = false;
   auctionVisibleCount = null;
-  // First render closes the auction overlay and gives end-of-auction
-  // coaching a chance to fire while cards_played_count is still 0.
+  auctionAnimating = false;
+  // Tutorial reveals end with the auction — server's visible_hands() rule
+  // takes over (e.g. dummy hidden until after the opening lead).
+  tutorialReveals = new Set();
   if (lastState) render(lastState);
-  // Then ask the server to play any non-user seats (e.g., LHO's opening
-  // lead) until it's the user's turn. No-op for the leader role.
   if (sessionId) {
     try {
       const data = await api(`/api/session/${sessionId}/start-play`, { method: "POST" });
@@ -663,41 +763,11 @@ async function undoLast() {
   }
 }
 
-// ---------- Claude grading ----------
+// ---------- session totals ----------
 
-const PREFS_KEY = "bridgePlayTrainer.prefs.v1";
-const CLAUDE_MODEL = "claude-opus-4-7";
+let sessionImps = 0;                 // Running IMPs vs DD since this tab was opened
+let impsCountedForSession = null;    // session_id whose IMPs have already been folded in
 
-// USD per million tokens. Opus 4.7 = $15 in / $75 out (≤200k context).
-// Haiku 4.5 used only by the API-key wizard's one-byte test call.
-const CLAUDE_PRICING = {
-  "claude-opus-4-7":            { input: 15,   output: 75,  cache_write_5m: 18.75, cache_read: 1.50 },
-  "claude-haiku-4-5-20251001":  { input: 0.80, output: 4,   cache_write_5m: 1.00,  cache_read: 0.08 },
-};
-function usageToCost(model, usage) {
-  const p = CLAUDE_PRICING[model];
-  if (!p || !usage) return 0;
-  return (
-    (usage.input_tokens || 0)                  * (p.input || 0) +
-    (usage.output_tokens || 0)                 * (p.output || 0) +
-    (usage.cache_creation_input_tokens || 0)   * (p.cache_write_5m || 0) +
-    (usage.cache_read_input_tokens || 0)       * (p.cache_read || 0)
-  ) / 1_000_000;
-}
-const LIFETIME_COST_KEY = "claudeLifetimeCostUSD";
-function bumpDealCost(model, usage) {
-  const c = usageToCost(model, usage);
-  if (!c) return;
-  dealCost += c;
-  sessionCost += c;
-  const prior = parseFloat(localStorage.getItem(LIFETIME_COST_KEY) || "0") || 0;
-  localStorage.setItem(LIFETIME_COST_KEY, String(prior + c));
-  renderSessionCost();
-}
-function renderSessionCost() {
-  const el = document.getElementById("session-cost");
-  if (el) el.textContent = `Session: ${formatUSD(sessionCost)}`;
-}
 function renderSessionImps() {
   const el = document.getElementById("session-imps");
   if (!el) return;
@@ -713,892 +783,45 @@ function bumpImpsIfNeeded(state) {
   impsCountedForSession = sessionId;
   renderSessionImps();
 }
-function formatUSD(n) {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.005) return `$${n.toFixed(3)}`;
-  return n > 0 ? "<$0.005" : "$0.000";
-}
-const STRUCTURED_FROM_TRICK = 4;
-const HCP = { A: 4, K: 3, Q: 2, J: 1 };
-const SUIT_SYMBOL_FROM_CHAR = { "♠": "S", "♥": "H", "♦": "D", "♣": "C" };
 
-let groundTruth = null;
-let inferenceHandledForTrick = -1;
-let inferenceOpenedManually = false;
+// ---------- coaching panel ----------
 
-// Coaching mode (slice 1: end-of-auction + opening-lead).
-let coachingFiredTriggers = new Set();   // Set<string>: which triggers have already fired this deal
-let coachingTips = [];                   // Array<{trigger, label, text}> — accumulates across the deal so the user can scroll back
-let dealCost = 0;                        // USD spent on Claude API calls this deal
-let sessionCost = 0;                     // USD spent since this tab was opened
-let sessionImps = 0;                     // Running IMPs vs DD since this tab was opened
-let impsCountedForSession = null;        // session_id whose IMPs have already been folded in
-let prefetchedAfterLeadPromise = null;   // in-flight Claude call kicked off at end of auction
-let coachingPending = false;             // True while a Claude call is in flight
-
-function getPrefs() {
-  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; }
-  catch { return {}; }
-}
-function setPrefs(patch) {
-  localStorage.setItem(PREFS_KEY, JSON.stringify({ ...getPrefs(), ...patch }));
-}
-function clearPref(key) {
-  const p = getPrefs(); delete p[key];
-  localStorage.setItem(PREFS_KEY, JSON.stringify(p));
-}
-function gradingEnabled() { return !!getPrefs().gradingEnabled; }
-function gradingTrigger() { return getPrefs().gradingTrigger || "trick4"; }
-function gradingKey() { return getPrefs().anthropicKey || ""; }
-function gradingMode() { return getPrefs().gradingMode || "coaching"; }
-function isCoaching() { return gradingMode() === "coaching"; }
-
-// One-shot: when coaching became the default, clear any persisted
-// gradingMode so returning users land in coaching instead of their
-// pre-existing "testing" pref. Idempotent via the marker key.
-(function migrateGradingModeDefault() {
-  const MARK = "coachingDefaultMigratedV1";
-  if (getPrefs()[MARK]) return;
-  clearPref("gradingMode");
-  setPrefs({ [MARK]: true });
-})();
-
-// --- settings modal ---
-
-function openSettings() {
-  document.getElementById("settings-grading-enabled").checked = gradingEnabled();
-  document.getElementById("settings-trigger").value = gradingTrigger();
-  document.getElementById("settings-trigger-row").style.display =
-    gradingMode() === "coaching" ? "none" : "";
-  syncKeyStatus();
-  syncLifetimeCost();
-  document.getElementById("settings-modal").hidden = false;
-}
-function syncLifetimeCost() {
-  const lifetime = parseFloat(localStorage.getItem(LIFETIME_COST_KEY) || "0") || 0;
-  document.getElementById("settings-lifetime-cost").textContent = formatUSD(lifetime);
-}
-function closeSettings() {
-  setPrefs({
-    gradingEnabled: document.getElementById("settings-grading-enabled").checked,
-    gradingTrigger: document.getElementById("settings-trigger").value,
-  });
-  document.getElementById("settings-modal").hidden = true;
-  if (lastState) updateInferenceUI(lastState);
-}
-function syncKeyStatus() {
-  const key = gradingKey();
-  const status = document.getElementById("settings-key-status");
-  const removeBtn = document.getElementById("settings-key-remove");
-  if (key) {
-    status.textContent = `set (…${key.slice(-4)})`;
-    removeBtn.hidden = false;
-  } else {
-    status.textContent = "not set";
-    removeBtn.hidden = true;
-  }
-}
-function removeKey() {
-  if (!confirm("Remove your Anthropic API key from this browser?")) return;
-  clearPref("anthropicKey");
-  syncKeyStatus();
-}
-
-// --- key wizard ---
-
-function openWizard() {
-  document.getElementById("settings-modal").hidden = true;
-  document.getElementById("wizard-modal").hidden = false;
-  showWizardStep(1);
-  document.getElementById("wizard-key-input").value = "";
-  const status = document.getElementById("wizard-test-status");
-  status.textContent = "";
-  status.className = "muted";
-}
-function closeWizard() {
-  document.getElementById("wizard-modal").hidden = true;
-}
-function showWizardStep(n) {
-  const steps = document.querySelectorAll(".wizard-step");
-  steps.forEach((s, i) => { s.hidden = ((i + 1) !== n); });
-}
-function wizardStepCount() {
-  return document.querySelectorAll(".wizard-step").length;
-}
-async function testAndSaveKey() {
-  const key = document.getElementById("wizard-key-input").value.trim();
-  const status = document.getElementById("wizard-test-status");
-  if (!key.startsWith("sk-ant-")) {
-    status.textContent = "That doesn't look right — the key should start with sk-ant-.";
-    status.className = "err";
-    return;
-  }
-  status.textContent = "Testing…";
-  status.className = "muted";
-  const testBtn = document.getElementById("wizard-test-btn");
-  testBtn.disabled = true;
-  try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1,
-        messages: [{ role: "user", content: "ok" }],
-      }),
-    });
-    if (!r.ok) {
-      const txt = await r.text();
-      status.textContent = `Key didn't work (${r.status}). ${txt.slice(0, 120)}`;
-      status.className = "err";
-      return;
-    }
-    setPrefs({ anthropicKey: key, gradingEnabled: true });
-    syncKeyStatus();
-    showWizardStep(wizardStepCount());
-  } catch (e) {
-    status.textContent = `Test failed: ${e.message}`;
-    status.className = "err";
-  } finally {
-    testBtn.disabled = false;
-  }
-}
-
-// --- bridge math helpers (browser side) ---
-
-function handHcp(hand) {
-  let n = 0;
-  for (const s of "SHDC") for (const r of hand[s]) n += HCP[r] || 0;
-  return n;
-}
-function handLengths(hand) {
-  return { S: hand.S.length, H: hand.H.length, D: hand.D.length, C: hand.C.length };
-}
-function formatHand(hand) {
-  return `♠${hand.S.join("") || "-"} ♥${hand.H.join("") || "-"} ♦${hand.D.join("") || "-"} ♣${hand.C.join("") || "-"}`;
-}
-function seatLabel(seat, state) {
-  if (seat === state.declarer) return `Declarer (${seat})`;
-  if (seat === state.dummy) return `Dummy (${seat})`;
-  return `Defender (${seat})`;
-}
-
-// --- ground truth fetch ---
-
-async function ensureGroundTruth({ force = false } = {}) {
-  if (!sessionId) return groundTruth;
-  if (groundTruth && !force) return groundTruth;
-  groundTruth = await api(`/api/session/${sessionId}/ground-truth`);
-  return groundTruth;
-}
-
-// --- inference panel state machine ---
-
-function inferenceAllowed(state) {
-  if (!gradingEnabled() || !gradingKey()) return false;
-  if (state.complete) return false;
-  if (bidsInCenter() || trickFreeze) return false;
-  const completed = (state.trick_history || []).length;
-  return completed >= 1;
-}
-
-function inferenceAutoTriggered(state) {
-  if (!inferenceAllowed(state)) return false;
-  const trigger = gradingTrigger();
-  if (trigger === "manual") return false;
-  const completed = (state.trick_history || []).length;
-  if (trigger === "every") return completed >= 1 && completed < 13;
-  if (trigger === "trick4") return completed >= 3 && completed < 13;
-  return false;
-}
-
-function inferenceInputMode(state) {
-  const completed = (state.trick_history || []).length;
-  return completed >= STRUCTURED_FROM_TRICK ? "structured" : "free";
-}
+let coachingTips = [];               // Array<{text}> — accumulates across the deal
 
 function syncSidebarVisibility() {
   const infVis = !document.getElementById("inference-panel").hidden;
-  const fbVis = !document.getElementById("feedback-panel").hidden;
-  document.getElementById("sidebar").hidden = (infVis || fbVis);
-}
-
-async function updateInferenceUI(state) {
-  const panel = document.getElementById("inference-panel");
-  const gradeBtn = document.getElementById("grade-now-btn");
-
-  // Coaching mode: fire pre-lead / opening-lead triggers, keep the panel
-  // visible while a tip is showing or being fetched.
-  if (isCoaching()) {
-    gradeBtn.hidden = true;
-    // If a Claude call is in flight, leave the panel as-is (the runner
-    // will re-render when it returns).
-    if (coachingPending) {
-      syncSidebarVisibility();
-      return;
-    }
-    const trig = pendingCoachingTrigger(state);
-    if (trig) {
-      runCoachingTip(trig, state);
-      return;
-    }
-    // No new trigger pending; keep the panel visible if we have tips so
-    // the student can still scroll through earlier coaching.
-    if (coachingTips.length > 0) {
-      renderCoachingPanel();
-    } else {
-      panel.hidden = true;
-      syncSidebarVisibility();
-    }
-    return;
-  }
-
-  const allowed = inferenceAllowed(state);
-  // Manual-trigger Grade button: visible only in manual mode while allowed.
-  if (allowed && gradingTrigger() === "manual") {
-    gradeBtn.hidden = false;
-    gradeBtn.disabled = false;
-  } else {
-    gradeBtn.hidden = true;
-  }
-
-  const completed = (state.trick_history || []).length;
-  const autoOpen = inferenceAutoTriggered(state) && inferenceHandledForTrick < completed;
-  const shouldShow = autoOpen || inferenceOpenedManually;
-  if (!shouldShow) {
-    panel.hidden = true;
-    syncSidebarVisibility();
-    return;
-  }
-  try {
-    await ensureGroundTruth();
-  } catch (e) {
-    panel.hidden = true;
-    syncSidebarVisibility();
-    return;
-  }
-  panel.hidden = false;
-  renderInferenceBody(state);
-  syncSidebarVisibility();
-}
-
-function renderInferenceBody(state) {
-  const body = document.getElementById("inference-body");
-  body.innerHTML = "";
-  const completed = (state.trick_history || []).length;
-  const labels = (groundTruth.hidden_labels || []).join(" and ");
-  body.appendChild(el("div", { class: "prompt-line" },
-    `After ${completed} trick${completed === 1 ? "" : "s"} — your read on ${labels}.`));
-
-  const mode = inferenceInputMode(state);
-  if (mode === "free") {
-    body.appendChild(el("textarea", {
-      id: "infer-textarea",
-      placeholder: "e.g. West has ♥KQJ; East 2-3 spades, 8-10 HCP.",
-    }));
-  } else {
-    const rem = computeRemainingFromState(state);
-    body.appendChild(el("div", { class: "muted" },
-      `Hidden cards left: ♠${rem.suits.S} ♥${rem.suits.H} ♦${rem.suits.D} ♣${rem.suits.C}  ·  HCP unseen: ${rem.hcp}`));
-    for (let i = 0; i < groundTruth.hidden_seats.length; i++) {
-      const seat = groundTruth.hidden_seats[i];
-      const label = groundTruth.hidden_labels[i];
-      const block = el("div", { class: "struct-block" });
-      block.appendChild(el("div", { class: "struct-block-title" }, `Your read on ${label}`));
-      for (const suit of ["S", "H", "D", "C"]) {
-        const row = el("div", { class: "struct-row" });
-        const lbl = el("label", {});
-        lbl.appendChild(el("span", { class: suitClass(suit) }, SUIT_SYMBOL[suit]));
-        lbl.appendChild(document.createTextNode(" length:"));
-        row.appendChild(lbl);
-        row.appendChild(el("input", {
-          type: "number", min: "0", max: "13",
-          "data-seat": seat, "data-field": `len-${suit}`,
-        }));
-        block.appendChild(row);
-      }
-      const hcpRow = el("div", { class: "struct-row" });
-      hcpRow.appendChild(el("label", {}, "HCP estimate:"));
-      hcpRow.appendChild(el("input", {
-        type: "number", min: "0", max: "40",
-        "data-seat": seat, "data-field": "hcp",
-      }));
-      block.appendChild(hcpRow);
-      body.appendChild(block);
-    }
-  }
-  document.getElementById("inference-status").textContent = "";
-}
-
-function computeRemainingFromState(state) {
-  const suits = { S: 0, H: 0, D: 0, C: 0 };
-  let hcp = 0;
-  for (const seat of groundTruth.hidden_seats) {
-    const init = groundTruth.initial_hands[seat];
-    const played = state.cards_played_by_seat[seat] || [];
-    const playedSet = new Set();
-    for (const cd of played) {
-      const suit = SUIT_SYMBOL_FROM_CHAR[cd[0]];
-      const rank = cd.slice(1);
-      playedSet.add(`${suit}${rank}`);
-    }
-    for (const suit of "SHDC") {
-      for (const rank of init[suit]) {
-        if (!playedSet.has(`${suit}${rank}`)) {
-          suits[suit] += 1;
-          hcp += HCP[rank] || 0;
-        }
-      }
-    }
-  }
-  return { suits, hcp };
-}
-
-function collectStructuredEstimate() {
-  const est = {};
-  for (const seat of groundTruth.hidden_seats) {
-    est[seat] = { lengths: { S: 0, H: 0, D: 0, C: 0 }, hcp: 0 };
-    for (const suit of "SHDC") {
-      const input = document.querySelector(`[data-seat="${seat}"][data-field="len-${suit}"]`);
-      est[seat].lengths[suit] = parseInt(input?.value || "0", 10);
-    }
-    const hcpInput = document.querySelector(`[data-seat="${seat}"][data-field="hcp"]`);
-    est[seat].hcp = parseInt(hcpInput?.value || "0", 10);
-  }
-  return est;
-}
-
-// --- payload builders (mirror pipe5) ---
-
-function visibleSeats(gt = groundTruth) {
-  const hidden = new Set(gt.hidden_seats);
-  return ["N", "E", "S", "W"].filter(s => !hidden.has(s));
-}
-
-function commonBlocks(state, gt = groundTruth) {
-  const visBlock = visibleSeats(gt)
-    .map(s => `${seatLabel(s, state)}: ${formatHand(gt.initial_hands[s])}`)
-    .join("\n");
-  const hidBlock = gt.hidden_seats
-    .map(s => `${s}: ${formatHand(gt.initial_hands[s])}`)
-    .join("\n");
-  const auctionLine = (state.auction || []).map(c => `${c.seat}:${c.call}`).join(" ");
-  const completed = (state.trick_history || []).length;
-  const tricksTxt = (state.trick_history || []).map(t =>
-    `Trick ${t.n}: led by ${t.leader} — ${t.plays.map(p => `${p.seat}:${p.card}`).join(", ")}  won by ${t.winner}`
-  ).join("\n") || "(none)";
-  return { visBlock, hidBlock, auctionLine, completed, tricksTxt };
-}
-
-function buildFreePayload(state, userText) {
-  const { visBlock, hidBlock, auctionLine, completed, tricksTxt } = commonBlocks(state);
-  return `## Auction
-Dealer: ${state.dealer}
-${auctionLine}
-Final contract: ${state.contract_str}
-
-## Role
-${groundTruth.role_desc}
-
-## Visible to student
-${visBlock}
-
-## Hidden (ground truth — NOT shown to student)
-${hidBlock}
-
-## Play so far (${completed} tricks)
-${tricksTxt}
-
-## Student's prose estimate
-${userText}
-
-Return JSON only.`;
-}
-
-function buildStructuredPayload(state, est) {
-  const { visBlock, hidBlock, auctionLine, completed, tricksTxt } = commonBlocks(state);
-  const studentLines = Object.entries(est).map(([s, v]) =>
-    `${s}: ♠${v.lengths.S} ♥${v.lengths.H} ♦${v.lengths.D} ♣${v.lengths.C}   HCP=${v.hcp}`
-  ).join("\n");
-  const actualLines = groundTruth.hidden_seats.map(s => {
-    const l = handLengths(groundTruth.initial_hands[s]);
-    return `${s}: ♠${l.S} ♥${l.H} ♦${l.D} ♣${l.C}   HCP=${handHcp(groundTruth.initial_hands[s])}`;
-  }).join("\n");
-  return `## Auction
-Dealer: ${state.dealer}
-${auctionLine}
-Final contract: ${state.contract_str}
-
-## Role
-${groundTruth.role_desc}
-
-## Visible to student
-${visBlock}
-
-## Ground truth for the hidden hands (NOT shown to student)
-${actualLines}
-${hidBlock}
-
-## Play so far (${completed} tricks)
-${tricksTxt}
-
-## Student's structured estimate
-${studentLines}
-
-Grade each length and HCP separately. Return JSON only.`;
-}
-
-const SEAT_PERSPECTIVE = `The seat letters in the payload use the student's rotated view: S = the student (always bottom of the table), N = partner, W = LHO (left-hand opponent), E = RHO (right-hand opponent). When you write claims, notes, hints, or any narrative text, refer to the seats from the student's perspective using "you", "partner", "LHO", and "RHO" — not the raw letters. The JSON "claim" field for structured grading may still use the letters S/N/E/W for compactness, but every other field aimed at the student should use the perspective labels.`;
-
-const FREE_SYSTEM_PROMPT = `You are a bridge instructor grading a student's free-text read on the hidden hands during a deal.
-
-You receive: the auction, the hands visible to the student, the cards played so far, the ACTUAL hidden hands (ground truth — known only to you), and the student's prose estimate.
-
-Grade the student's stated claims against ground truth AND against what was inferrable from the visible evidence.
-
-${SEAT_PERSPECTIVE}
-
-Return JSON only:
-{
-  "facets": [{"claim": "...", "verdict": "correct|partial|missed|wrong", "note": "<one sentence>"}],
-  "missed_inferences": ["..."],
-  "next_trick_hint": "...",
-  "overall": "excellent|good|partial|poor",
-  "score": <0.0..1.0>
-}`;
-
-const STRUCTURED_SYSTEM_PROMPT = `You are a bridge instructor grading a student's structured read on hidden hands.
-
-You receive: the auction, visible hands, play history, ACTUAL hidden hands (ground truth), and the student's per-hand suit-lengths + HCP estimates.
-
-For EACH hidden hand, grade each suit-length and HCP separately:
-- length exact = correct, ±1 = partial, ±2+ = wrong
-- HCP within ±1 = correct, within ±3 = partial, ±4+ = wrong
-
-${SEAT_PERSPECTIVE}
-
-Return JSON only:
-{
-  "facets": [{"claim": "<who> <suit/HCP> = <student> (actual: <truth>)", "verdict": "...", "note": "..."}],
-  "reasoning_notes": ["<short observations on WHY the actual hand was inferrable>"],
-  "next_trick_hint": "...",
-  "overall": "excellent|good|partial|poor",
-  "score": <0.0..1.0>
-}`;
-
-// ---- Coaching mode prompts ----
-
-const COACH_AFTER_LEAD_TPR_PROMPT = `You are a friendly bridge coach. The opening lead has been played and dummy is now face-up. Time to plan the play (or defense) from this point.
-
-${SEAT_PERSPECTIVE}
-
-You receive the auction, the student's hand, dummy (now visible), and the opening lead card. Opponents' remaining cards are unseen.
-
-**Information discipline**: phrase every claim from what the student can infer.
-- OK: "the missing ♠A is with the opponents" (visible hands account for everything else).
-- OK: "given LHO's lead of ♣K, expect the ♣Q with LHO too".
-- NOT OK: "West has the ♥Q" / "finesse the ♣J through East" unless directly inferred from auction or lead.
-
-**Honor accounting — before naming any "missing" card**: list which top honors (A, K, Q) appear in the visible hands per suit. Only call an honor "missing" if it does NOT appear in any visible hand. Do not say "knock out the ♠K" if dummy already holds it.
-
-**Accuracy**: be conservative and double-dummy-aware. Assume opponents play their honors optimally. Common errors to avoid:
-- Dummy ♣KQ doubleton opposite opp ♣Axx typically establishes ONE trick after the ace falls, not two.
-- "Finesse for the K" is a 50% trick, not a sure one — don't count it in the Tricks card.
-- A 5-card side suit only yields length tricks AFTER trumps are drawn and the suit is set up, and only if the split is favorable.
-
-Cover three angles, tailored to the student's role:
-- **Tricks available**: SURE tricks the student's side has right now from the visible cards. No finesses, no favorable splits.
-- **Promotion opportunities**: which cards CAN grow into winners (length tricks, honor sequences, finesse positions, suit establishment) — be specific about the assumption ("if the ♠Q is onside", "if hearts split 3-2").
-- **Risks to watch for**: bad splits, opponent honors located by the bidding/lead, fast losers in side suits.
-
-Return ONLY a JSON object with three string fields, each one short sentence under 30 words:
-{"tricks": "...", "promotion": "...", "risks": "..."}
-
-Your response must begin with \`{\` and end with \`}\`. No prose, preamble ("Tough contract…", "Let me think…"), code fences, or commentary outside the JSON. If a category has no useful info, write "(insufficient information)" — do NOT ask for clarification. No bullets inside the strings. Refer to seats with "you / partner / LHO / RHO".`;
-
-function buildCoachingPayload(state, triggerKey, gt = groundTruth) {
-  const { visBlock, hidBlock, auctionLine, completed, tricksTxt } = commonBlocks(state, gt);
-  let stage, finalBlock = "";
-  if (triggerKey === "openingLead") {
-    stage = "opening lead has just been played; dummy is now face-up — plan the play (or defense) from here";
-  } else if (triggerKey === "endOfPlay") {
-    stage = "all 13 tricks played; deal is over";
-    const r = state.result || {};
-    const decl = r.declarer_tricks;
-    const off = (r.result_offset !== undefined) ? r.result_offset
-              : (decl !== undefined ? decl - state.tricks_needed : undefined);
-    const outcome = off === undefined ? "?"
-                  : off === 0 ? "contract made exactly"
-                  : off > 0   ? `contract made with ${off} overtrick${off === 1 ? "" : "s"}`
-                              : `contract went down ${-off}`;
-    finalBlock = `
-
-## Final result (authoritative — use these numbers, do not recount from the play log)
-Contract: ${state.contract_str}
-Declarer took ${decl} tricks (needed ${state.tricks_needed}). Outcome: ${outcome}.
-Double-dummy: declarer can take ${r.dd_tricks} tricks in this strain.`;
-  } else {
-    stage = "right after the opening lead";
-  }
-  const partialTrick = (state.current_trick || [])
-    .map(p => `${p.seat}:${p.card}`).join(", ") || "(none yet)";
-  // Ground truth is shared ONLY at end of play (deal is over). Pre-play /
-  // mid-play coaching must work from what the student can see.
-  const hiddenSection = triggerKey === "endOfPlay"
-    ? `\n\n## Hidden (ground truth — deal is over; OK to reference)\n${hidBlock}`
-    : "";
-  return `## Auction
-Dealer: ${state.dealer}
-${auctionLine}
-Final contract: ${state.contract_str}
-
-## Role
-${gt.role_desc}
-
-## Stage
-${stage}.
-
-## Visible to student
-${visBlock}${hiddenSection}
-
-## Play so far (${completed} completed tricks)
-${tricksTxt}
-
-## Cards in the current (in-progress) trick
-${partialTrick}${finalBlock}
-
-Respond with plain prose for the student. No JSON.`;
-}
-
-async function callClaudeCoach(system, userText) {
-  const key = gradingKey();
-  if (!key) throw new Error("no API key configured");
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 800,
-      system,
-      messages: [{ role: "user", content: userText }],
-    }),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`Anthropic ${r.status}: ${txt.slice(0, 200)}`);
-  }
-  const data = await r.json();
-  bumpDealCost(CLAUDE_MODEL, data.usage);
-  return (data.content || []).map(b => b.type === "text" ? b.text : "").join("").trim();
-}
-
-function pendingCoachingTrigger(state) {
-  if (!isCoaching() || !gradingEnabled() || !gradingKey()) return null;
-  if (bidsInCenter() || trickFreeze) return null;
-  // End of play: deal is complete. Fires once per deal.
-  if (state.complete) {
-    if (!coachingFiredTriggers.has("endOfPlay")) return "endOfPlay";
-    return null;
-  }
-  const tricksDone = (state.trick_history || []).length;
-  const currentCards = (state.current_trick || []).length;
-  const preLead = tricksDone === 0 && currentCards === 0;
-  // Opening lead: exactly one card has hit the table (either still in
-  // trick 1 or trick 1 just completed).
-  const openingPlayed = (tricksDone === 0 && currentCards === 1)
-                     || (tricksDone === 1 && currentCards === 0);
-  // First (and only) pre-completion pass: Tricks / Promotion / Risks once
-  // the opening lead has been made and dummy is tabled. Fires for all roles.
-  if (openingPlayed && !coachingFiredTriggers.has("openingLead")) return "openingLead";
-  return null;
-}
-
-const COACH_END_OF_PLAY_PROMPT = `You are a friendly bridge coach. The deal is complete. You can now see every card and the full play record.
-
-${SEAT_PERSPECTIVE}
-
-Audit the student's plays (in declarer mode the student plays you AND your partner / dummy; in defender mode the student plays only their seat). Compare against ideal double-dummy play.
-
-Categorize the plays:
-- **errors**: card choices that clearly gave up a trick the student's side should have won — concrete: "at trick N you played the ♣Q when the ♣J wins the trick cheaper" etc.
-- **suboptimal**: technically less than double-dummy but didn't cost a trick on this deal (still worth pointing out so the habit doesn't bite later).
-- **summary**: one short sentence comparing the contract result to what was makeable with double-dummy play — and one positive note if there's something to praise.
-
-Return ONLY a JSON object with three string fields, each at most two short sentences:
-{"errors": "...", "suboptimal": "...", "summary": "..."}
-
-Your response must begin with \`{\` and end with \`}\`. No prose, preamble, explanation, code fences, or trailing commentary outside the JSON. If you lack information to audit a category, fill that field with "(insufficient information)" — do NOT ask for clarification.
-
-If there are no errors, set "errors" to "(no clear errors — well played)". Same convention for "suboptimal". Refer to seats with "you / partner / LHO / RHO".`;
-
-function parseJsonFromClaude(text) {
-  let t = text.trim();
-  if (t.startsWith("```")) {
-    t = t.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
-  }
-  // Salvage: if Claude prefixed prose ("I need to..."), grab the first {...} block.
-  if (!t.startsWith("{")) {
-    const first = t.indexOf("{");
-    const last = t.lastIndexOf("}");
-    if (first >= 0 && last > first) t = t.slice(first, last + 1);
-  }
-  return JSON.parse(t);
-}
-
-async function runCoachingTip(triggerKey, state) {
-  coachingFiredTriggers.add(triggerKey);
-  coachingPending = true;
-  renderCoachingPanel();
-  try {
-    // Refetch each time: hidden_seats / role_desc change between
-    // pre-lead and post-lead (dummy reveals after the opening lead).
-    await ensureGroundTruth({ force: true });
-    const system = triggerKey === "openingLead" ? COACH_AFTER_LEAD_TPR_PROMPT
-                 :                                 COACH_END_OF_PLAY_PROMPT;
-    let text;
-    if (triggerKey === "openingLead" && prefetchedAfterLeadPromise) {
-      // Use the call we kicked off at end of auction. Same model, same prompt,
-      // same payload (the DDS lead is deterministic), so the response is valid.
-      text = await prefetchedAfterLeadPromise;
-      prefetchedAfterLeadPromise = null;
-    } else {
-      const payload = buildCoachingPayload(state, triggerKey);
-      text = await callClaudeCoach(system, payload);
-    }
-    const obj = parseJsonFromClaude(text);
-    if (triggerKey === "openingLead") {
-      coachingTips.push({ trigger: triggerKey, label: "After lead · Tricks",    text: obj.tricks    || "(no response)" });
-      coachingTips.push({ trigger: triggerKey, label: "After lead · Promotion", text: obj.promotion || "(no response)" });
-      coachingTips.push({ trigger: triggerKey, label: "After lead · Risks",     text: obj.risks     || "(no response)" });
-    } else { // endOfPlay
-      coachingTips.push({ trigger: triggerKey, label: "End of play · Clear errors", text: obj.errors     || "(no response)" });
-      coachingTips.push({ trigger: triggerKey, label: "End of play · Suboptimal",   text: obj.suboptimal || "(no response)" });
-      coachingTips.push({ trigger: triggerKey, label: "End of play · Result",       text: obj.summary    || "(no response)" });
-    }
-  } catch (e) {
-    const errLabel = triggerKey === "openingLead" ? "After lead" : "End of play";
-    coachingTips.push({ trigger: triggerKey, label: `${errLabel} (error)`, text: `Could not fetch coaching tip: ${e.message}` });
-  } finally {
-    coachingPending = false;
-    renderCoachingPanel();
-    // Chain to the next trigger if the state has advanced while we were
-    // waiting on Claude (e.g., opening lead got played after end-of-auction).
-    if (lastState) {
-      const next = pendingCoachingTrigger(lastState);
-      if (next) runCoachingTip(next, lastState);
-    }
-  }
+  document.getElementById("sidebar").hidden = infVis;
 }
 
 function renderCoachingPanel() {
   const panel = document.getElementById("inference-panel");
-  const title = document.getElementById("inference-title");
   const body = document.getElementById("inference-body");
-  const submit = document.getElementById("inference-submit");
-  const skip = document.getElementById("inference-skip");
-  const hint = document.getElementById("inference-hint");
-  const hintBody = document.getElementById("inference-hint-body");
+  if (coachingTips.length === 0 && !tutorialContinueResolve) {
+    panel.hidden = true;
+    syncSidebarVisibility();
+    return;
+  }
   panel.hidden = false;
-  title.textContent = "Coaching · scroll up to revisit";
   body.innerHTML = "";
   body.classList.add("coaching-tips-list");
   for (const tip of coachingTips) {
     const card = el("div", { class: "coach-tip-card" });
-    card.appendChild(el("div", { class: "coach-tip-label" }, tip.label));
     const textDiv = el("div", { class: "coach-tip-text" });
     appendTextWithColoredSuits(textDiv, tip.text);
     card.appendChild(textDiv);
     body.appendChild(card);
   }
-  if (coachingPending) {
-    body.appendChild(el("div", { class: "coach-tip-card coach-loading" }, "Thinking…"));
+  if (tutorialContinueResolve) {
+    const cont = el("button", {
+      id: "coach-continue-btn",
+      class: "primary",
+      onclick: onContinueClick,
+    }, "Continue");
+    body.appendChild(cont);
   }
-  // Auto-scroll to the newest tip but leave older ones reachable above.
+  // Auto-scroll to the newest tip so older ones can be reached above.
   body.scrollTop = body.scrollHeight;
-  // Hide testing-mode buttons and any leftover Continue button.
-  submit.hidden = true;
-  skip.hidden = true;
-  hint.hidden = true;
-  hintBody.hidden = true;
-  const cont = document.getElementById("coach-continue-btn");
-  if (cont) cont.remove();
   syncSidebarVisibility();
-}
-
-async function callClaude(system, userText) {
-  const key = gradingKey();
-  if (!key) throw new Error("no API key configured");
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 1500,
-      system,
-      messages: [{ role: "user", content: userText }],
-    }),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`Anthropic ${r.status}: ${txt.slice(0, 200)}`);
-  }
-  const data = await r.json();
-  bumpDealCost(CLAUDE_MODEL, data.usage);
-  let text = (data.content || []).map(b => b.type === "text" ? b.text : "").join("").trim();
-  if (text.startsWith("```")) {
-    text = text.split("```")[1] || "";
-    if (text.toLowerCase().startsWith("json")) text = text.split("\n").slice(1).join("\n");
-    text = text.split("```")[0];
-  }
-  return JSON.parse(text);
-}
-
-async function submitInference() {
-  const state = lastState;
-  if (!state) return;
-  const status = document.getElementById("inference-status");
-  status.className = "muted";
-  status.textContent = "Asking Claude…";
-  const submitBtn = document.getElementById("inference-submit");
-  submitBtn.disabled = true;
-  try {
-    const mode = inferenceInputMode(state);
-    let payload, system;
-    if (mode === "free") {
-      const text = document.getElementById("infer-textarea").value.trim();
-      if (!text) {
-        status.textContent = "Type something first.";
-        status.className = "err";
-        return;
-      }
-      payload = buildFreePayload(state, text);
-      system = FREE_SYSTEM_PROMPT;
-    } else {
-      const est = collectStructuredEstimate();
-      payload = buildStructuredPayload(state, est);
-      system = STRUCTURED_SYSTEM_PROMPT;
-    }
-    const result = await callClaude(system, payload);
-    renderFeedback(result);
-    inferenceHandledForTrick = (state.trick_history || []).length;
-    inferenceOpenedManually = false;
-    document.getElementById("inference-panel").hidden = true;
-    syncSidebarVisibility();
-    status.textContent = "";
-  } catch (e) {
-    status.textContent = "Grading failed: " + e.message;
-    status.className = "err";
-  } finally {
-    submitBtn.disabled = false;
-  }
-}
-
-function skipInference() {
-  const state = lastState;
-  inferenceHandledForTrick = state ? (state.trick_history || []).length : -1;
-  inferenceOpenedManually = false;
-  document.getElementById("inference-panel").hidden = true;
-  syncSidebarVisibility();
-}
-
-function openInferenceManually() {
-  inferenceOpenedManually = true;
-  if (lastState) updateInferenceUI(lastState);
-}
-
-function toggleHint() {
-  const div = document.getElementById("inference-hint-body");
-  if (div.hidden) {
-    renderHintBody();
-    div.hidden = false;
-  } else {
-    div.hidden = true;
-  }
-}
-
-function renderHintBody() {
-  const div = document.getElementById("inference-hint-body");
-  div.innerHTML = "";
-  const state = lastState;
-  if (!state) return;
-
-  if (state.auction && state.auction.length) {
-    div.appendChild(el("div", { class: "hint-section-title" }, "Auction"));
-    const grid = el("div", { class: "center-auction-grid hint-auction-grid" });
-    fillAuctionGrid(grid, state);
-    div.appendChild(grid);
-  }
-
-  div.appendChild(el("div", { class: "hint-section-title" }, "Tricks"));
-  const history = state.trick_history || [];
-  if (history.length === 0) {
-    div.appendChild(el("div", { class: "muted" }, "(no tricks played yet)"));
-    return;
-  }
-  for (const t of history) {
-    const row = el("div", { class: "hint-trick-row" });
-    row.appendChild(el("span", { class: "hint-trick-num" }, `T${t.n}`));
-    row.appendChild(document.createTextNode(" "));
-    t.plays.forEach((p, i) => {
-      row.appendChild(el("span", { class: "hint-play-seat" }, `${p.seat}:`));
-      const sym = p.card[0];
-      const klass = (sym === "♥" || sym === "♦") ? "suit-red" : "suit-black";
-      row.appendChild(el("span", { class: klass }, p.card));
-      if (i < t.plays.length - 1) row.appendChild(document.createTextNode("  "));
-    });
-    row.appendChild(document.createTextNode(`  → ${t.winner}`));
-    div.appendChild(row);
-  }
-}
-
-const VERDICT_ICON = { correct: "✅", partial: "⚠️", missed: "❌", wrong: "❌" };
-
-function renderFeedback(ev) {
-  const panel = document.getElementById("feedback-panel");
-  const body = document.getElementById("feedback-body");
-  body.innerHTML = "";
-  panel.hidden = false;
-  syncSidebarVisibility();
-  const score = (typeof ev.score === "number") ? ev.score.toFixed(2) : "?";
-  body.appendChild(el("div", { class: "feedback-overall" },
-    `Overall: ${String(ev.overall || "?").toUpperCase()}   (score ${score})`));
-  for (const f of (ev.facets || [])) {
-    const row = el("div", { class: "feedback-row" });
-    row.appendChild(el("span", { class: "verdict-icon" }, VERDICT_ICON[f.verdict] || "•"));
-    row.appendChild(el("span", {}, `${f.claim || ""} — ${f.note || ""}`));
-    body.appendChild(row);
-  }
-  for (const r of (ev.reasoning_notes || [])) {
-    const row = el("div", { class: "feedback-row" });
-    row.appendChild(el("span", { class: "verdict-icon" }, "💡"));
-    row.appendChild(el("span", {}, r));
-    body.appendChild(row);
-  }
-  for (const m of (ev.missed_inferences || [])) {
-    const row = el("div", { class: "feedback-row" });
-    row.appendChild(el("span", { class: "verdict-icon" }, "❌"));
-    row.appendChild(el("span", {}, `MISSED: ${m}`));
-    body.appendChild(row);
-  }
-  if (ev.next_trick_hint) {
-    body.appendChild(el("div", { class: "feedback-hint" },
-      `🎯 Next trick: ${ev.next_trick_hint}`));
-  }
 }
 
 // ---------- init ----------
@@ -1624,50 +847,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("role-select").addEventListener("change", () => {
     if (currentScenario) nextDeal();
-  });
-
-  const modeSelect = document.getElementById("mode-select");
-  if (modeSelect) {
-    modeSelect.value = gradingMode();
-    modeSelect.addEventListener("change", (ev) => {
-      setPrefs({ gradingMode: ev.target.value });
-      if (lastState) updateInferenceUI(lastState);
-    });
-  }
-
-  // Settings + wizard wiring
-  document.getElementById("settings-btn").addEventListener("click", openSettings);
-  document.getElementById("settings-close").addEventListener("click", closeSettings);
-  document.getElementById("settings-key-setup").addEventListener("click", openWizard);
-  document.getElementById("settings-key-remove").addEventListener("click", removeKey);
-  document.getElementById("settings-cost-reset").addEventListener("click", () => {
-    if (confirm("Reset lifetime Claude spend to $0?")) {
-      localStorage.setItem(LIFETIME_COST_KEY, "0");
-      syncLifetimeCost();
-    }
-  });
-  for (const b of document.querySelectorAll(".wizard-cancel")) {
-    b.addEventListener("click", closeWizard);
-  }
-  for (const b of document.querySelectorAll(".wizard-next")) {
-    b.addEventListener("click", () => showWizardStep(parseInt(b.getAttribute("data-next"), 10)));
-  }
-  for (const b of document.querySelectorAll(".wizard-back")) {
-    b.addEventListener("click", () => showWizardStep(parseInt(b.getAttribute("data-back"), 10)));
-  }
-  document.getElementById("wizard-test-btn").addEventListener("click", testAndSaveKey);
-  for (const b of document.querySelectorAll(".wizard-finish")) {
-    b.addEventListener("click", closeWizard);
-  }
-
-  // Inference + grading wiring
-  document.getElementById("inference-submit").addEventListener("click", submitInference);
-  document.getElementById("inference-skip").addEventListener("click", skipInference);
-  document.getElementById("grade-now-btn").addEventListener("click", openInferenceManually);
-  document.getElementById("inference-hint").addEventListener("click", toggleHint);
-  document.getElementById("feedback-close").addEventListener("click", () => {
-    document.getElementById("feedback-panel").hidden = true;
-    syncSidebarVisibility();
   });
 
   await loadMenu();
