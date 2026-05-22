@@ -363,6 +363,19 @@ class Session:
         # action. Undo pops the top and replays from move_log up to that count.
         self.undo_stack = []
 
+    def set_student_seat(self, student: Player):
+        """Override the user's seat (typically Player.south for coached
+        scenarios). Recomputes user_seats so the user controls whichever
+        side the student is on — declaring side if student is declarer or
+        dummy, otherwise just the student's seat (defender). The rotation
+        is also recomputed so the student appears at display south."""
+        self._user_seat = student
+        self._rotation_shift = (int(Player.south) - int(student)) % 4
+        if student in (self.declarer, self.dummy):
+            self.user_seats = {self.declarer, self.dummy}
+        else:
+            self.user_seats = {student}
+
     def _dd_tricks_for_declarer(self) -> int:
         """Double-dummy tricks for the contract's declarer/strain on the
         original (pre-play) layout. Cached after first call."""
@@ -421,15 +434,12 @@ class Session:
 
     def visible_hands(self):
         # Real-bridge order: dummy is tabled only AFTER the opening lead has
-        # been played, regardless of which side the student is on.
-        if self.role == "declarer":
-            if self.cards_played_count >= 1:
-                return {self.declarer, self.dummy}
-            return {self.declarer}
-        me = next(iter(self.user_seats))
-        if self.cards_played_count >= 1:
-            return {me, self.dummy}
-        return {me}
+        # been played. Pre-lead the student sees only their own hand; after
+        # the lead they also see dummy (and, if they're on the declaring
+        # side, also the partner's hand they're playing).
+        if self.cards_played_count == 0:
+            return {self._user_seat}
+        return self.user_seats | {self.dummy}
 
     def cards_played_by_seat(self):
         by_seat = {p: [] for p in (Player.north, Player.east, Player.south, Player.west)}
@@ -749,6 +759,14 @@ def start_session(body: StartSessionBody):
         sess.coaching = parse_coaching(
             board_slices[idx], _auction_pbn_calls(boards[idx].auction)
         )
+    # When the scenario ships with embedded coaching, the prose addresses
+    # the student as "you" — convention is Student=S (real). Override the
+    # role-derived seat so south sits at the bottom of the table and the
+    # user controls whichever side south ends up on.
+    if sess.coaching is not None:
+        student_letter = boards[idx].info.get("Student", "S")
+        student = LETTER_SEAT.get(student_letter, Player.south)
+        sess.set_student_seat(student)
     # NOTE: deliberately NOT calling sess.auto_play_until_user() here. The
     # client calls /start-play once the user clicks the Play button so any
     # end-of-auction coaching has a chance to fire while cards_played_count
