@@ -653,7 +653,8 @@ SESSIONS: dict[str, Session] = {}
 
 @app.get("/api/scenarios")
 def list_scenarios():
-    files = sorted(p.stem for p in BBA_DIR.glob("*.pbn") if not p.stem.startswith("-"))
+    # Only scenarios that have an embedded-coaching file are user-pickable.
+    files = sorted(p.stem for p in COACHING_DIR.glob("*.pbn") if not p.stem.startswith("-"))
     return {"scenarios": files}
 
 
@@ -701,12 +702,13 @@ def parse_layout(text: str):
 @app.get("/api/menu")
 def get_menu():
     layout_path = next((p for p in LAYOUT_PATHS if p.exists()), None)
-    available = {p.stem for p in BBA_DIR.glob("*.pbn") if not p.stem.startswith("-")}
+    # Only scenarios with embedded coaching are user-pickable; sections that
+    # have zero coached scenarios drop out entirely.
+    available = {p.stem for p in COACHING_DIR.glob("*.pbn") if not p.stem.startswith("-")}
     if layout_path is None:
         # Fallback: flat alphabetical
         return {"sections": [{"title": "Scenarios", "scenarios": sorted(available)}]}
     sections = parse_layout(layout_path.read_text())
-    # Filter to scenarios that actually have a playable bba/*.pbn
     out = []
     for sec in sections:
         scenarios = [s for s in sec["scenarios"] if s in available]
