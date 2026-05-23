@@ -95,13 +95,23 @@ function expandRevealToken(tok) {
 // seats pre-lead, but the tutorial may want to reveal whichever side the
 // author called out. After startPlay clears tutorialReveals this is a
 // no-op; server visibility rules take over.
+//
+// Mid-auction (auctionAnimating === true) we ignore any reveals beyond the
+// student's own hand: real-bridge convention is that each player sees only
+// their own 13 cards until the auction concludes. The accumulated reveals
+// take effect on the final render once auctionAnimating flips to false.
 function applyTutorialMask(state) {
   if (tutorialReveals.size === 0) return;
   const shift = state.rotation_shift || 0;
-  const visibleDisplay = new Set();
-  for (const real of tutorialReveals) {
-    const disp = realToDisplaySeat(real, shift);
-    if (disp) visibleDisplay.add(disp);
+  let visibleDisplay;
+  if (auctionAnimating) {
+    visibleDisplay = new Set(["S"]);
+  } else {
+    visibleDisplay = new Set();
+    for (const real of tutorialReveals) {
+      const disp = realToDisplaySeat(real, shift);
+      if (disp) visibleDisplay.add(disp);
+    }
   }
   const source = state.initial_hands || state.hands;
   for (const seat of SEATS) {
@@ -139,6 +149,10 @@ function renderHand(hand, opts) {
   return rows;
 }
 
+// Seat letters in display frame map to fixed role labels because the table
+// orientation is fixed (user at bottom, partner top, LHO left, RHO right).
+const ROLE_LABEL = { S: "You", N: "Partner", W: "LHO", E: "RHO" };
+
 function renderSeatInto(slot, seatLetter, state) {
   slot.innerHTML = "";
   slot.classList.remove("face-down", "active");
@@ -146,7 +160,7 @@ function renderSeatInto(slot, seatLetter, state) {
     return;
   }
 
-  let title = seatLetter;
+  let title = ROLE_LABEL[seatLetter] || seatLetter;
   if (seatLetter === state.declarer) title += " (declarer)";
   if (seatLetter === state.dummy) title += " (dummy)";
   if (state.to_play === seatLetter && !state.complete) {
@@ -203,8 +217,12 @@ function fillAuctionGrid(grid, state, opts = {}) {
   }
   const order = ["W", "N", "E", "S"];
   const dealerIdx = order.indexOf(state.dealer);
+  // Pad pre-dealer columns with empty cells so the auction lines up under
+  // the right column. The original used "—" placeholders, but those read as
+  // "this seat bid nothing" rather than "the dealer comes later" — clearer
+  // to leave them visually empty.
   for (let i = 0; i < dealerIdx; i++) {
-    grid.appendChild(el("div", { class: "auction-cell empty" }, "—"));
+    grid.appendChild(el("div", { class: "auction-cell empty" }));
   }
   const visibleCalls = (auctionVisibleCount === null)
     ? state.auction
@@ -294,19 +312,15 @@ function lhoOf(seat) { return SEAT_ORDER[(seatOffset(seat) + 1) % 4]; }
 function rhoOf(seat) { return SEAT_ORDER[(seatOffset(seat) + 3) % 4]; }
 
 function userPrimarySeat(state) {
-  if (state.role === "leader") return lhoOf(state.declarer);
-  if (state.role === "defender") return rhoOf(state.declarer);
-  return state.declarer;
+  // The server's rotation always lands the user's seat at display south,
+  // regardless of role (or, for coached scenarios, regardless of declarer).
+  return "S";
 }
 
 function slotLayout(state) {
-  const bottom = userPrimarySeat(state);
-  return {
-    bottom,
-    top: partnerOf(bottom),
-    left: lhoOf(bottom),
-    right: rhoOf(bottom),
-  };
+  // Fixed compass orientation — user (South) at bottom, partner (North) at
+  // top, West on the left (LHO of South), East on the right (RHO of South).
+  return { bottom: "S", top: "N", left: "W", right: "E" };
 }
 
 function renderTable(state) {
@@ -529,6 +543,7 @@ async function startSession() {
     coachingTips = [];
     tutorialReveals = new Set();
     tutorialContinueResolve = null;
+    bidQuizResolve = null;
     document.getElementById("inference-panel").hidden = true;
     document.getElementById("result-panel").hidden = true;
     document.getElementById("next-deal-btn").disabled = false;
@@ -617,12 +632,18 @@ async function claimRest() {
 async function animateAuction(state) {
   auctionAnimationToken += 1;
   const myToken = auctionAnimationToken;
-  // If a previous deal's loop is parked on a Continue promise, unblock it so
-  // it can wake up, see the token mismatch, and exit cleanly.
+  // If a previous deal's loop is parked on a Continue promise (or a bid
+  // quiz), unblock it so it can wake up, see the token mismatch, and exit
+  // cleanly.
   if (tutorialContinueResolve) {
     const r = tutorialContinueResolve;
     tutorialContinueResolve = null;
     r();
+  }
+  if (bidQuizResolve) {
+    const r = bidQuizResolve;
+    bidQuizResolve = null;
+    r("Pass");  // arbitrary; the abandoned loop will exit before using it
   }
 
   if (!state.coaching || state.coaching.length === 0) {
@@ -655,16 +676,64 @@ async function animateAuction(state) {
   }
 
   const totalCalls = (state.auction || []).length;
+  // After a non-student call we briefly pause if the NEXT call is the
+  // student's, so the user can see the opponent/partner bid land on the
+  // grid before the bid box appears. Long enough to register, short enough
+  // not to feel like dead time.
+  const AUCTION_PRE_QUIZ_MS = 800;
   for (let i = 0; i < totalCalls; i++) {
     if (myToken !== auctionAnimationToken) return;
+    const call = state.auction[i];
+    const chunks = chunkByBid.get(i) || [];
+    const isStudentBid = call.seat === "S" && call.call !== "Pass";
+
+    // Quiz the student before each of their non-pass calls. Display-S is
+    // always the student after the server's rotation override. Two attempts:
+    // first miss prompts "try again"; second miss reveals the textbook call
+    // (the anchored coaching chunk follows either way). Pause briefly if
+    // the prior bid was revealed without a chunk — the chunk's Continue gate
+    // gives a natural pause, so we only need one when there isn't one.
+    if (isStudentBid) {
+      const prevCall = i > 0 ? state.auction[i - 1] : null;
+      const prevHadChunk = i > 0 && chunkByBid.has(i - 1);
+      if (prevCall && !prevHadChunk) {
+        await sleep(AUCTION_PRE_QUIZ_MS);
+        if (myToken !== auctionAnimationToken) return;
+      }
+      let revealed = false;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const pick = await presentBidQuiz(call.call);
+        if (myToken !== auctionAnimationToken) return;
+        const ok = normaliseBidForCompare(pick) === normaliseBidForCompare(call.call);
+        if (ok) {
+          coachingTips.push({
+            quizResult: "ok",
+            text: `✓ Correct — you bid ${formatBidForDisplay(pick)}. Nice.`,
+          });
+          revealed = true;
+          break;
+        }
+        if (attempt === 1) {
+          coachingTips.push({
+            quizResult: "miss",
+            text: `✗ Not quite — you bid ${formatBidForDisplay(pick)}. Take another look at your hand and try again.`,
+          });
+          if (lastState) render(lastState);
+        } else {
+          coachingTips.push({
+            quizResult: "miss",
+            text: `✗ Still not it — you bid ${formatBidForDisplay(pick)}. The textbook call here is ${formatBidForDisplay(call.call)}.`,
+          });
+          revealed = true;
+        }
+      }
+    }
+
     auctionVisibleCount = i + 1;
     render(lastState);
-    const chunks = chunkByBid.get(i);
-    if (chunks) {
-      for (const ch of chunks) {
-        if (myToken !== auctionAnimationToken) return;
-        await presentChunk(ch);
-      }
+    for (const ch of chunks) {
+      if (myToken !== auctionAnimationToken) return;
+      await presentChunk(ch);
     }
   }
 
@@ -701,6 +770,83 @@ function onContinueClick() {
   const r = tutorialContinueResolve;
   tutorialContinueResolve = null;
   if (r) r();
+}
+
+// --- bidding quiz ---
+//
+// At each of the student's non-pass calls we surface a bidding box and let
+// them pick a call. The result is compared to the PBN's actual call; either
+// way the trainer reveals the call and shows the anchored coaching chunk.
+// Free entry, no legality grayout — feedback is the chunk prose itself.
+
+let bidQuizResolve = null;             // resolve() of the in-flight quiz Promise
+const STRAINS = ["C", "D", "H", "S", "NT"];
+const STRAIN_GLYPH = { C: "♣", D: "♦", H: "♥", S: "♠", NT: "NT" };
+
+function presentBidQuiz(actualCall) {
+  return new Promise(resolve => {
+    bidQuizResolve = resolve;
+    renderCoachingPanel();
+  });
+}
+
+function onBidQuizClick(callCode) {
+  const r = bidQuizResolve;
+  bidQuizResolve = null;
+  if (r) r(callCode);
+}
+
+// Normalise a call code so "1NT" / "1N" / "1nt" all compare equal, and the
+// server's "1♣" → "1C" form lines up with what the bid box emits ("1C").
+function normaliseBidForCompare(s) {
+  if (!s) return "";
+  let t = String(s).toUpperCase().trim();
+  t = t.replace("♣", "C").replace("♦", "D").replace("♥", "H").replace("♠", "S");
+  if (/^\d+N$/.test(t)) t += "T";
+  if (t === "PASS") t = "PASS";
+  return t;
+}
+
+// Render a bid in user-facing form: "1NT", "1♠", "X", "XX", "Pass".
+function formatBidForDisplay(s) {
+  if (!s) return "?";
+  const norm = normaliseBidForCompare(s);
+  if (norm === "PASS") return "Pass";
+  if (norm === "X" || norm === "XX") return norm;
+  const m = norm.match(/^(\d+)(NT|C|D|H|S)$/);
+  if (!m) return s;
+  if (m[2] === "NT") return `${m[1]}NT`;
+  return `${m[1]}${STRAIN_GLYPH[m[2]]}`;
+}
+
+function renderBidBox() {
+  const box = el("div", { class: "bid-quiz-box" });
+  box.appendChild(el("div", { class: "bid-quiz-prompt" }, "What do you bid?"));
+
+  const grid = el("div", { class: "bid-quiz-grid" });
+  for (let level = 1; level <= 7; level++) {
+    for (const strain of STRAINS) {
+      const code = `${level}${strain}`;
+      const cell = el("button", {
+        class: `bid-quiz-btn ${strain === "H" || strain === "D" ? "suit-red" : "suit-black"}`,
+        onclick: () => onBidQuizClick(code),
+      });
+      cell.appendChild(document.createTextNode(level + ""));
+      cell.appendChild(el("span", {}, STRAIN_GLYPH[strain]));
+      grid.appendChild(cell);
+    }
+  }
+  box.appendChild(grid);
+
+  const calls = el("div", { class: "bid-quiz-calls" });
+  for (const [code, label] of [["Pass", "Pass"], ["X", "Double"], ["XX", "Redouble"]]) {
+    calls.appendChild(el("button", {
+      class: "bid-quiz-btn bid-quiz-call",
+      onclick: () => onBidQuizClick(code),
+    }, label));
+  }
+  box.appendChild(calls);
+  return box;
 }
 
 async function startPlay() {
@@ -796,7 +942,7 @@ function syncSidebarVisibility() {
 function renderCoachingPanel() {
   const panel = document.getElementById("inference-panel");
   const body = document.getElementById("inference-body");
-  if (coachingTips.length === 0 && !tutorialContinueResolve) {
+  if (coachingTips.length === 0 && !tutorialContinueResolve && !bidQuizResolve) {
     panel.hidden = true;
     syncSidebarVisibility();
     return;
@@ -805,13 +951,18 @@ function renderCoachingPanel() {
   body.innerHTML = "";
   body.classList.add("coaching-tips-list");
   for (const tip of coachingTips) {
-    const card = el("div", { class: "coach-tip-card" });
+    const cls = "coach-tip-card" +
+      (tip.quizResult === "ok" ? " coach-tip-ok" :
+       tip.quizResult === "miss" ? " coach-tip-miss" : "");
+    const card = el("div", { class: cls });
     const textDiv = el("div", { class: "coach-tip-text" });
     appendTextWithColoredSuits(textDiv, tip.text);
     card.appendChild(textDiv);
     body.appendChild(card);
   }
-  if (tutorialContinueResolve) {
+  if (bidQuizResolve) {
+    body.appendChild(renderBidBox());
+  } else if (tutorialContinueResolve) {
     const cont = el("button", {
       id: "coach-continue-btn",
       class: "primary",

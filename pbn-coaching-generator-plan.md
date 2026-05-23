@@ -205,6 +205,28 @@ Menu ([server.py:526](server.py#L526)) keeps listing scenarios from `bba/` (the 
 - **Idempotence**: if `coaching/<x>.pbn` already exists, the subagent overwrites unless we say otherwise. For the pilot, overwriting is fine — we only have empty `coaching/` today. Productionizing later may want a skip-if-exists default.
 - **Pipeline integration**: out of scope for this PR. The subagent prompt is portable; later it can be invoked by the Claude Agent SDK from the upstream pipeline.
 
+## Followups for content quality
+
+These are not in the current pipeline output but are worth adding when we regenerate.
+
+- **Bid-specific miss prose.** The trainer now quizzes the student at each of their non-pass calls and supports two attempts before revealing the answer. Today the between-attempt hint is a generic "try again" because each coaching chunk only carries explanation for the *correct* bid. To give a real hint after a wrong pick ("you bid 3NT but partner could be 0 HCP — count your stoppers"), each chunk would need an optional field like `hint` or `common-wrong-answer` with prose that doesn't reveal the right call. Format sketch:
+
+  ```
+  [BID 1NT]
+  <prose explaining why 1NT is correct on this hand>
+  [hint] <prose nudging the student toward the right reasoning without
+  naming the call — e.g. "Count your HCP again. Where does 14-16 balanced
+  fit in the response table?">
+  ```
+
+  The trainer would render `[hint]` between attempts and the main prose only after a correct pick (or after the 2nd miss).
+
+- **Common-mistake-anchored prose.** Even richer: per chunk, a `[wrong 2NT]` block that fires only when the student picks 2NT and explains *that specific* error. Heaviest content lift but the strongest pedagogy. Optional — probably worth doing for a handful of "easy to confuse" decisions (1NT-vs-2NT raises, 4M-vs-3NT with a misfit, weak-vs-strong opening choices), not every bid.
+
+- **Scenario @chat as fallback hint.** Cheap win without regenerating files: the trainer could surface a generic-but-relevant hint by including the `/*@chat */` block (or its decision-tree section) in the session payload, and the frontend could show that as the hint between attempts. Bridges the gap until per-chunk hints exist.
+
+- **Bidding-terminology audit.** The pilot agents occasionally use bridge terminology loosely — e.g. on `Basic_Takeout_Double` board 3, a 2♥→3♥ raise was described as a "jump-raise" (it's a single-step invitational raise; a jump raise of 2♥ would be 4♥). When regenerating, harden the subagent prompt with a glossary: "single raise" = +1 level, "jump raise" = +2 levels, "preemptive raise" = preemptive in level, "limit/invitational raise" = strength label not level label, etc. Worth a manual pass on the existing 8 files in the meantime if accuracy matters before the regen.
+
 ## Critical files
 
 - `Practice-Bidding-Scenarios/btn/<scenario>.btn` — scenario brief source.

@@ -719,6 +719,53 @@ button.primary:hover { background: #16456a; }
   color: #777;
   font-style: italic;
 }
+.coach-tip-ok {
+  background: #eaf6e7;
+  border-color: #b4d6ab;
+}
+.coach-tip-miss {
+  background: #fbeded;
+  border-color: #d8a9a9;
+}
+
+/* Bidding quiz box, rendered inside the coaching panel during the
+   auction-replay animation. */
+.bid-quiz-box {
+  background: #f7f4ec;
+  border: 1px solid #d6caa8;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.bid-quiz-prompt {
+  font-weight: 600;
+}
+.bid-quiz-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.25rem;
+}
+.bid-quiz-calls {
+  display: flex;
+  gap: 0.25rem;
+}
+.bid-quiz-btn {
+  font-size: 1rem;
+  padding: 0.4rem 0.5rem;
+  background: white;
+  border: 1px solid #c8c2b1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.bid-quiz-btn:hover {
+  background: #fff8e3;
+  border-color: #a8a08b;
+}
+.bid-quiz-call {
+  flex: 1;
+}
 
 /* Feedback panel overlays the sidebar so it stays in view while you keep
    playing the next trick — no scrolling down to see what Claude said. */
