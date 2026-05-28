@@ -627,7 +627,7 @@ async function startSession() {
       body: JSON.stringify({ scenario: currentScenario, board_index: boardIndex, role }),
     });
     sessionId = data.session_id;
-    sidebarForcedOpen = false;
+    closeScenariosView();
     if (data.board_index != null) {
       document.getElementById("board-index").value = String(data.board_index);
     }
@@ -1307,27 +1307,71 @@ function bumpImpsIfNeeded(state) {
 
 let coachingTips = [];               // Array<{text}> — accumulates across the deal
 
-// The coaching panel normally hides the sidebar (scenario selector) to free up
-// room during a coached deal. The "Scenarios" header button sets this flag to
-// force the selector back into view; it's reset when a new session starts so
-// the next coached deal reclaims the space.
-let sidebarForcedOpen = false;
-
+// The coaching panel is a fixed overlay sitting on top of the sidebar's slot,
+// so the sidebar is hidden whenever the panel is visible.
 function syncSidebarVisibility() {
   const infVis = !document.getElementById("inference-panel").hidden;
-  document.getElementById("sidebar").hidden = infVis && !sidebarForcedOpen;
+  document.getElementById("sidebar").hidden = infVis;
 }
 
-function showScenarioSelector() {
-  sidebarForcedOpen = true;
+// The coaching panel's title bar doubles as a Coaching/Scenarios toggle. Since
+// the panel overlays the sidebar, we can't just reveal the sidebar underneath;
+// instead we move the scenario search + menu into the panel itself. Clicking
+// "Coaching" switches to the scenario picker; the picker title is NOT a toggle
+// — picking a scenario starts a deal and returns to Coaching.
+let scenariosViewOpen = false;
+
+function setInferenceTitle(text, toggleable) {
+  document.getElementById("inference-title-text").textContent = text;
+  document.getElementById("inference-title").classList.toggle("no-toggle", !toggleable);
+}
+
+function openScenariosView() {
+  if (scenariosViewOpen) return;
+  scenariosViewOpen = true;
+  const panelScenarios = document.getElementById("panel-scenarios");
+  panelScenarios.appendChild(document.getElementById("sidebar-search"));
+  panelScenarios.appendChild(document.getElementById("menu"));
+  const body = document.getElementById("inference-body");
+  body.hidden = true;
+  body.style.display = "none";  // .coaching-tips-list sets display:flex, which beats [hidden]
+  panelScenarios.hidden = false;
+  document.getElementById("inference-panel").hidden = false;
+  setInferenceTitle("Scenarios", false);
   syncSidebarVisibility();
   const search = document.getElementById("search-input");
   if (search) search.focus();
 }
 
+function closeScenariosView() {
+  if (!scenariosViewOpen) return;
+  scenariosViewOpen = false;
+  // Return the search + menu to the sidebar (after its heading).
+  const sidebar = document.getElementById("sidebar");
+  sidebar.appendChild(document.getElementById("sidebar-search"));
+  sidebar.appendChild(document.getElementById("menu"));
+  document.getElementById("panel-scenarios").hidden = true;
+  const body = document.getElementById("inference-body");
+  body.hidden = false;
+  body.style.display = "";
+  setInferenceTitle("Coaching", true);
+}
+
+function onInferenceTitleClick() {
+  // Only "Coaching" toggles to the scenario picker; "Scenarios" is not a toggle.
+  if (!scenariosViewOpen) openScenariosView();
+}
+
 function renderCoachingPanel() {
   const panel = document.getElementById("inference-panel");
   const body = document.getElementById("inference-body");
+  // While the scenario picker is up, keep the panel visible and leave the tip
+  // log alone — it reappears when a scenario is chosen (closeScenariosView).
+  if (scenariosViewOpen) {
+    panel.hidden = false;
+    syncSidebarVisibility();
+    return;
+  }
   if (coachingTips.length === 0 && !tutorialContinueResolve && !bidQuizResolve) {
     panel.hidden = true;
     syncSidebarVisibility();
@@ -1372,7 +1416,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);
   document.getElementById("hint-btn").addEventListener("click", showHint);
-  document.getElementById("show-scenarios-btn").addEventListener("click", showScenarioSelector);
+  document.getElementById("inference-title").addEventListener("click", onInferenceTitleClick);
   const reviewBtn = document.getElementById("review-btn");
   // Pointer capture keeps pointerup firing on the button even if the cursor
   // drifts off mid-press, so the auction stays up while the user holds.

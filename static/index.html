@@ -13,7 +13,6 @@
       <div id="status-line" class="muted"></div>
     </div>
     <div id="header-right">
-      <button id="show-scenarios-btn" title="Re-open the scenario list">☰ Scenarios</button>
       <div id="session-imps" class="muted" title="Running total of IMPs vs double-dummy since this tab was opened">Session IMPs: 0</div>
     </div>
   </div>
@@ -69,8 +68,12 @@
       <div id="trick-summary" class="muted"></div>
 
       <div class="card grading-panel" id="inference-panel" hidden>
-        <h2 id="inference-title">Coaching</h2>
+        <h2 id="inference-title" title="Click to pick a different scenario">
+          <span id="inference-title-text">Coaching</span>
+          <span id="inference-title-hint">Scenarios ▸</span>
+        </h2>
         <div id="inference-body"></div>
+        <div id="panel-scenarios" hidden></div>
       </div>
 
       <div class="card" id="result-panel" hidden>

@@ -594,17 +594,6 @@ button.primary:hover { background: #16456a; }
   line-height: 1;
 }
 #settings-btn:hover { background: var(--accent-soft); }
-#show-scenarios-btn {
-  font-size: 1rem;
-  font-weight: 600;
-  padding: 0.45rem 0.9rem;
-  background: var(--card-bg);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  cursor: pointer;
-  line-height: 1;
-}
-#show-scenarios-btn:hover { background: var(--accent-soft); }
 #header-right {
   display: flex;
   align-items: center;
@@ -719,7 +708,26 @@ button.primary:hover { background: #16456a; }
   border-radius: 8px 8px 0 0;
   font-size: 1.05rem;
   border-bottom: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
 }
+#inference-title:hover #inference-title-hint { background: rgba(255, 255, 255, 0.35); }
+#inference-title-hint {
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 0.15rem 0.55rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+/* In Scenarios view the title is just a label — selecting a scenario returns
+   to Coaching, so the bar itself doesn't toggle back. */
+#inference-title.no-toggle { cursor: default; }
+#inference-title.no-toggle #inference-title-hint { display: none; }
 
 /* Coaching mode: scrollable tip log inside the inference panel. */
 .coaching-tips-list {
