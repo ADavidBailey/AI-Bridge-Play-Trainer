@@ -594,6 +594,17 @@ button.primary:hover { background: #16456a; }
   line-height: 1;
 }
 #settings-btn:hover { background: var(--accent-soft); }
+#show-scenarios-btn {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.45rem 0.9rem;
+  background: var(--card-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1;
+}
+#show-scenarios-btn:hover { background: var(--accent-soft); }
 #header-right {
   display: flex;
   align-items: center;

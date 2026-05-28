@@ -22,6 +22,7 @@ let auctionAnimating = false;
 let auctionVisibleCount = null;     // null = show full auction; otherwise number of bids to reveal
 let auctionAnimationToken = 0;      // bumped to cancel in-flight animations when a new deal starts
 let awaitingPlay = false;           // auction is fully revealed; waiting for the user to click Play
+let auctionConcluded = false;       // bids fully revealed; post-auction planning prose is showing
 
 let reviewingAuction = false;       // user is holding the Review button
 
@@ -127,7 +128,13 @@ function applyTutorialMask(state) {
   if (tutorialReveals.size === 0) return;
   const shift = state.rotation_shift || 0;
   let visibleDisplay;
-  if (auctionAnimating) {
+  // While the bids are still being revealed one-by-one, each player sees only
+  // their own hand. Once the auction has concluded, the declarer is allowed to
+  // see the authored reveals (notably the dummy) so the post-auction planning
+  // prose's "count your winners" actually makes sense; leader/defender keep
+  // their own-hand-only view to avoid peeking at the declaring side pre-lead.
+  const revealAuthored = auctionConcluded && state.role === "declarer";
+  if (auctionAnimating && !revealAuthored) {
     visibleDisplay = new Set(["S"]);
   } else {
     visibleDisplay = new Set();
@@ -221,7 +228,13 @@ function renderSeatInto(slot, seatLetter, state) {
     return;
   }
 
-  const isCurrentSeat = state.to_play === seatLetter && !state.complete && !trickFreeze && !bidsInCenter();
+  // While a completed trick is frozen on screen for review, keep the user's
+  // OWN legal cards clickable (and outlined) so an eager player can lead to
+  // the next trick without waiting out the pause. Engine-controlled seats
+  // stay gated until the freeze clears.
+  const userToPlayHere = state.user_to_play && state.to_play === seatLetter;
+  const isCurrentSeat = state.to_play === seatLetter && !state.complete
+    && !bidsInCenter() && (!trickFreeze || userToPlayHere);
   const userControlsSeat = state.user_to_play && isCurrentSeat;
   const legalSet = new Set(state.legal_moves.map(m => `${m.suit}${m.rank}`));
   for (const row of renderHand(hand, { isCurrentSeat, userControlsSeat, legalSet })) {
@@ -614,6 +627,7 @@ async function startSession() {
       body: JSON.stringify({ scenario: currentScenario, board_index: boardIndex, role }),
     });
     sessionId = data.session_id;
+    sidebarForcedOpen = false;
     if (data.board_index != null) {
       document.getElementById("board-index").value = String(data.board_index);
     }
@@ -634,6 +648,7 @@ async function startSession() {
     viewingTrickIndex = null;
     trickFreeze = null;
     awaitingPlay = false;
+    auctionConcluded = false;
     render(data.state);
     animateAuction(data.state);
   } catch (e) {
@@ -642,7 +657,10 @@ async function startSession() {
 }
 
 async function playCard(suit, rank) {
-  if (!sessionId || trickFreeze) return;
+  if (!sessionId) return;
+  // An eager click while the previous trick is still frozen on screen should
+  // skip the remaining review pause and play right away.
+  if (trickFreeze) endTrickHoldEarly();
   try {
     const data = await api(`/api/session/${sessionId}/play`, {
       method: "POST",
@@ -654,15 +672,33 @@ async function playCard(suit, rank) {
   }
 }
 
+// The trick-hold pause is interruptible: endTrickHoldEarly() resolves the
+// in-flight hold immediately so the user's next card lands without waiting.
+let trickHoldResolve = null;
+
+function endTrickHoldEarly() {
+  const r = trickHoldResolve;
+  trickHoldResolve = null;
+  if (r) r();
+}
+
+function holdTrick(ms) {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { trickHoldResolve = null; resolve(); }, ms);
+    trickHoldResolve = () => { clearTimeout(timer); resolve(); };
+  });
+}
+
 // If the new state completes a trick, show the four cards in their seats for
-// TRICK_HOLD_MS before letting the trick collapse to the next one.
+// TRICK_HOLD_MS before letting the trick collapse to the next one. The hold is
+// skippable — clicking your next card ends it early (see playCard).
 async function advanceWithTrickHold(newState) {
   const oldLen = (lastState && lastState.trick_history && lastState.trick_history.length) || 0;
   const newLen = (newState.trick_history || []).length;
   if (newLen > oldLen) {
     trickFreeze = newState.trick_history[newLen - 1];
     render(newState);
-    await sleep(TRICK_HOLD_MS);
+    await holdTrick(TRICK_HOLD_MS);
     trickFreeze = null;
   }
   render(newState);
@@ -712,6 +748,7 @@ async function claimRest() {
 async function animateAuction(state) {
   auctionAnimationToken += 1;
   const myToken = auctionAnimationToken;
+  auctionConcluded = false;
   // If a previous deal's loop is parked on a Continue promise (or a bid
   // quiz), unblock it so it can wake up, see the token mismatch, and exit
   // cleanly.
@@ -837,6 +874,11 @@ async function animateAuction(state) {
   }
 
   if (myToken !== auctionAnimationToken) return;
+  // The auction is now fully revealed. Drop the mid-auction "own hand only"
+  // mask so a declarer can see the dummy while the post-auction planning
+  // prose ("count your winners…") is on screen.
+  auctionConcluded = true;
+  if (lastState) render(lastState);
   // Post-auction chunks fire after every bid is revealed (including the
   // student's final pass) — lets contract-summary prose follow the student's
   // decision instead of spoiling it inside the [BID 2X] chunk.
@@ -1078,6 +1120,7 @@ async function startPlay() {
   // Tutorial reveals end with the auction — server's visible_hands() rule
   // takes over (e.g. dummy hidden until after the opening lead).
   tutorialReveals = new Set();
+  auctionConcluded = false;
   if (lastState) render(lastState);
   if (sessionId) {
     try {
@@ -1250,9 +1293,22 @@ function bumpImpsIfNeeded(state) {
 
 let coachingTips = [];               // Array<{text}> — accumulates across the deal
 
+// The coaching panel normally hides the sidebar (scenario selector) to free up
+// room during a coached deal. The "Scenarios" header button sets this flag to
+// force the selector back into view; it's reset when a new session starts so
+// the next coached deal reclaims the space.
+let sidebarForcedOpen = false;
+
 function syncSidebarVisibility() {
   const infVis = !document.getElementById("inference-panel").hidden;
-  document.getElementById("sidebar").hidden = infVis;
+  document.getElementById("sidebar").hidden = infVis && !sidebarForcedOpen;
+}
+
+function showScenarioSelector() {
+  sidebarForcedOpen = true;
+  syncSidebarVisibility();
+  const search = document.getElementById("search-input");
+  if (search) search.focus();
 }
 
 function renderCoachingPanel() {
@@ -1302,6 +1358,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);
   document.getElementById("hint-btn").addEventListener("click", showHint);
+  document.getElementById("show-scenarios-btn").addEventListener("click", showScenarioSelector);
   const reviewBtn = document.getElementById("review-btn");
   // Pointer capture keeps pointerup firing on the button even if the cursor
   // drifts off mid-press, so the auction stays up while the user holds.
