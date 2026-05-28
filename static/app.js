@@ -22,7 +22,6 @@ let auctionAnimating = false;
 let auctionVisibleCount = null;     // null = show full auction; otherwise number of bids to reveal
 let auctionAnimationToken = 0;      // bumped to cancel in-flight animations when a new deal starts
 let awaitingPlay = false;           // auction is fully revealed; waiting for the user to click Play
-let auctionConcluded = false;       // bids fully revealed; post-auction planning prose is showing
 
 let reviewingAuction = false;       // user is holding the Review button
 
@@ -128,13 +127,11 @@ function applyTutorialMask(state) {
   if (tutorialReveals.size === 0) return;
   const shift = state.rotation_shift || 0;
   let visibleDisplay;
-  // While the bids are still being revealed one-by-one, each player sees only
-  // their own hand. Once the auction has concluded, the declarer is allowed to
-  // see the authored reveals (notably the dummy) so the post-auction planning
-  // prose's "count your winners" actually makes sense; leader/defender keep
-  // their own-hand-only view to avoid peeking at the declaring side pre-lead.
-  const revealAuthored = auctionConcluded && state.role === "declarer";
-  if (auctionAnimating && !revealAuthored) {
+  // While the bids are being revealed one-by-one, each player sees only their
+  // own hand (real-bridge convention). The dummy isn't shown until after the
+  // opening lead — at which point the server's visible_hands() takes over and
+  // the post-auction planning coaching fires (see startPlay).
+  if (auctionAnimating) {
     visibleDisplay = new Set(["S"]);
   } else {
     visibleDisplay = new Set();
@@ -648,7 +645,6 @@ async function startSession() {
     viewingTrickIndex = null;
     trickFreeze = null;
     awaitingPlay = false;
-    auctionConcluded = false;
     render(data.state);
     animateAuction(data.state);
   } catch (e) {
@@ -748,7 +744,6 @@ async function claimRest() {
 async function animateAuction(state) {
   auctionAnimationToken += 1;
   const myToken = auctionAnimationToken;
-  auctionConcluded = false;
   // If a previous deal's loop is parked on a Continue promise (or a bid
   // quiz), unblock it so it can wake up, see the token mismatch, and exit
   // cleanly.
@@ -772,12 +767,13 @@ async function animateAuction(state) {
   }
 
   // Bid-by-bid mode. Group coaching chunks by bid_index for fast lookup.
+  // post-auction chunks are skipped here — they fire after the opening lead
+  // (see startPlay), not during the auction animation.
   const chunkByBid = new Map();
   const introChunks = [];
-  const postAuctionChunks = [];
   for (const ch of state.coaching) {
     if (ch.bid_index === null || ch.bid_index === undefined) introChunks.push(ch);
-    else if (ch.bid_index === "post-auction") postAuctionChunks.push(ch);
+    else if (ch.bid_index === "post-auction") continue;
     else {
       if (!chunkByBid.has(ch.bid_index)) chunkByBid.set(ch.bid_index, []);
       chunkByBid.get(ch.bid_index).push(ch);
@@ -888,19 +884,9 @@ async function animateAuction(state) {
   }
 
   if (myToken !== auctionAnimationToken) return;
-  // The auction is now fully revealed. Drop the mid-auction "own hand only"
-  // mask so a declarer can see the dummy while the post-auction planning
-  // prose ("count your winners…") is on screen.
-  auctionConcluded = true;
-  if (lastState) render(lastState);
-  // Post-auction chunks fire after every bid is revealed (including the
-  // student's final pass) — lets contract-summary prose follow the student's
-  // decision instead of spoiling it inside the [BID 2X] chunk.
-  for (const ch of postAuctionChunks) {
-    if (myToken !== auctionAnimationToken) return;
-    await presentChunk(ch);
-  }
-  if (myToken !== auctionAnimationToken) return;
+  // Post-auction planning chunks are intentionally NOT shown here — they fire
+  // after the opening lead (see startPlay), so the coaching follows the lead
+  // and the dummy is on the table when "count your winners" appears.
   auctionAnimating = false;
   auctionVisibleCount = null;
   awaitingPlay = totalCalls > 0;
@@ -1134,7 +1120,6 @@ async function startPlay() {
   // Tutorial reveals end with the auction — server's visible_hands() rule
   // takes over (e.g. dummy hidden until after the opening lead).
   tutorialReveals = new Set();
-  auctionConcluded = false;
   if (lastState) render(lastState);
   if (sessionId) {
     try {
@@ -1142,11 +1127,18 @@ async function startPlay() {
       render(data.state);
       // For declarer/defender the server's auto_play_until_user has just
       // played the opening lead and dummy is now visible — pause briefly so
-      // the user can absorb the lead + dummy, then fire auction-end and
-      // post-lead tips together. (auction-end is moved here from pre-lead so
-      // the user reaches the lead/dummy without a Continue gate.)
+      // the user can absorb the lead + dummy, then fire the planning coaching.
       if (role === "declarer" || role === "defender") {
         await sleep(POST_LEAD_TIP_DELAY_MS);
+        // Post-auction planning chunks fire here (after the lead) so the dummy
+        // is on the table. Show TEXT ONLY — the server already reveals the
+        // dummy post-lead, so re-applying the chunk's [show] reveals would pin
+        // hands to their initial state and re-show cards as play continues.
+        const postAuctionChunks = ((lastState && lastState.coaching) || [])
+          .filter(c => c.bid_index === "post-auction");
+        for (const ch of postAuctionChunks) {
+          if (ch.text) await presentChunk({ text: ch.text });
+        }
         await presentTipsForStage(tips, "auction-end", role);
         await presentTipsForStage(tips, "post-lead", role);
       }
