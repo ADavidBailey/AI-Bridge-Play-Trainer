@@ -5,10 +5,18 @@ const SEAT_INDEX = { N: 0, E: 1, S: 2, W: 3 };
 const SUIT_SYMBOL = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAME = { S: "Spades", H: "Hearts", D: "Diamonds", C: "Clubs" };
 const RED_SUITS = new Set(["H", "D"]);
+// 4-color deck: ♠ black, ♥ red, ♦ orange, ♣ green. CSS classes own the colors.
+const SUIT_CODE_TO_CLASS = { S: "suit-spade", H: "suit-heart", D: "suit-diamond", C: "suit-club" };
+const SUIT_SYM_TO_CLASS  = { "♠": "suit-spade", "♥": "suit-heart", "♦": "suit-diamond", "♣": "suit-club" };
+function suitClassFromSymbol(sym) { return SUIT_SYM_TO_CLASS[sym] || ""; }
 
 let sessionId = null;
 let lastState = null;
 let viewingLastTrick = false;
+// When non-null, the center shows the cards from this specific trick index.
+// Set by clicking a card on the tricks-strip. Clears on any other click
+// (the center's existing onclick toggles back to normal).
+let viewingTrickIndex = null;
 let trickFreeze = null;             // { plays: [...] } while we pause to show the completed trick
 let auctionAnimating = false;
 let auctionVisibleCount = null;     // null = show full auction; otherwise number of bids to reveal
@@ -36,7 +44,22 @@ function togglePlayed(seatLetter) {
 
 function toggleLastTrick() {
   if (!lastState || !lastState.trick_history || lastState.trick_history.length === 0) return;
+  // If we're peeking at a specific trick from the strip, clicking center
+  // returns to normal. Otherwise toggle the last-trick peek as before.
+  if (viewingTrickIndex !== null) {
+    viewingTrickIndex = null;
+    render(lastState);
+    return;
+  }
   viewingLastTrick = !viewingLastTrick;
+  render(lastState);
+}
+
+function viewTrickFromStrip(idx) {
+  if (!lastState || !lastState.trick_history) return;
+  // Toggle: click the same trick again to return to normal.
+  viewingTrickIndex = viewingTrickIndex === idx ? null : idx;
+  viewingLastTrick = false;
   render(lastState);
 }
 
@@ -57,7 +80,7 @@ function el(tag, attrs = {}, ...children) {
   return e;
 }
 
-function suitClass(suit) { return RED_SUITS.has(suit) ? "suit-red" : "suit-black"; }
+function suitClass(suit) { return SUIT_CODE_TO_CLASS[suit] || ""; }
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -188,7 +211,7 @@ function renderSeatInto(slot, seatLetter, state) {
         const cards = el("div", { class: "played-cards" });
         for (const c of played) {
           const symbol = c[0];
-          const klass = (symbol === "♥" || symbol === "♦") ? "suit-red" : "";
+          const klass = suitClassFromSymbol(symbol);
           cards.appendChild(el("span", { class: `played-card ${klass}` }, c));
         }
         strip.appendChild(cards);
@@ -255,19 +278,21 @@ function renderTricksStrip(state) {
   const history = state.trick_history || [];
   if (history.length === 0) return;
   const ourSide = userSideLabel(state);
-  for (const t of history) {
+  history.forEach((t, idx) => {
     const winnerSide = (t.winner === "N" || t.winner === "S") ? "NS" : "EW";
     const klass = winnerSide === ourSide ? "ours" : "theirs";
+    const selectedKlass = viewingTrickIndex === idx ? " trick-back-selected" : "";
     strip.appendChild(el("div", {
-      class: `trick-back ${klass}`,
-      title: `Trick ${t.n} — won by ${t.winner}`,
+      class: `trick-back ${klass}${selectedKlass}`,
+      title: `Trick ${t.n} — won by ${t.winner} · click to view`,
+      onclick: () => viewTrickFromStrip(idx),
     }));
-  }
+  });
 }
 
 function appendTextWithColoredSuits(parent, text) {
   // Walk free-form text, wrapping ♠/♥/♦/♣ in colored spans.
-  const symMap = { "♠": "suit-black", "♥": "suit-red", "♦": "suit-red", "♣": "suit-black" };
+  const symMap = SUIT_SYM_TO_CLASS;
   for (const part of String(text).split(/([♠♥♦♣])/)) {
     if (part in symMap) parent.appendChild(el("span", { class: symMap[part] }, part));
     else if (part) parent.appendChild(document.createTextNode(part));
@@ -276,7 +301,7 @@ function appendTextWithColoredSuits(parent, text) {
 
 function appendCallWithColoredSuit(cell, callText) {
   // Server sends bids like "1♠", "3NT", "Pass", "X". Color the suit symbol.
-  const symMap = { "♠": "suit-black", "♥": "suit-red", "♦": "suit-red", "♣": "suit-black" };
+  const symMap = SUIT_SYM_TO_CLASS;
   const ntMatch = callText.match(/^(\d+)NT$/);
   if (ntMatch) {
     cell.appendChild(document.createTextNode(ntMatch[1] + "NT"));
@@ -294,13 +319,16 @@ function appendCallWithColoredSuit(cell, callText) {
 function renderContractDisplay(state) {
   const box = document.getElementById("contract-display");
   box.innerHTML = "";
-  const sym = state.strain_symbol;  // ♠/♥/♦/♣/NT
-  const symKlass =
-    sym === "♥" || sym === "♦" ? "suit-red" :
-    sym === "♠" || sym === "♣" ? "suit-black" : "";
   const main = el("div", { class: "contract-line-main" });
-  main.appendChild(el("span", {}, String(state.level)));
-  main.appendChild(el("span", { class: symKlass }, sym));
+  // Hide the final contract until the auction has fully revealed — knowing it
+  // ahead of time would spoil the bidding tutorial / bid quiz.
+  if (auctionAnimating) {
+    main.appendChild(el("span", { class: "muted" }, "?"));
+  } else {
+    const sym = state.strain_symbol;  // ♠/♥/♦/♣/NT
+    main.appendChild(el("span", {}, String(state.level)));
+    main.appendChild(el("span", { class: suitClassFromSymbol(sym) }, sym));
+  }
   box.appendChild(main);
   box.appendChild(el("div", { class: "contract-line-sub" }, `Dealer: ${state.dealer}`));
 }
@@ -369,7 +397,24 @@ function renderTable(state) {
       `Trick #${trickFreeze.n} — ${trickFreeze.winner} won`));
     for (const p of trickFreeze.plays) {
       const symbol = p.card[0];
-      const suitKlass = (symbol === "♥" || symbol === "♦") ? "suit-red" : "suit-black";
+      const suitKlass = suitClassFromSymbol(symbol);
+      const pos = seatToPosition[p.seat];
+      const posKlass = pos ? `center-trick-${pos}` : "";
+      center.appendChild(el("div", { class: `trick-card ${suitKlass} ${posKlass}` }, p.card));
+    }
+    return;
+  }
+
+  // Peek at a specific trick selected from the tricks strip — same render as
+  // showReview but pinned to viewingTrickIndex instead of "last".
+  if (viewingTrickIndex !== null && hasHistory && state.trick_history[viewingTrickIndex]) {
+    const t = state.trick_history[viewingTrickIndex];
+    center.classList.add("reviewing");
+    center.appendChild(el("div", { class: "center-trick-label" },
+      `Trick #${t.n} — ${t.winner} won · click to return`));
+    for (const p of t.plays) {
+      const symbol = p.card[0];
+      const suitKlass = suitClassFromSymbol(symbol);
       const pos = seatToPosition[p.seat];
       const posKlass = pos ? `center-trick-${pos}` : "";
       center.appendChild(el("div", { class: `trick-card ${suitKlass} ${posKlass}` }, p.card));
@@ -384,7 +429,7 @@ function renderTable(state) {
       `Last trick (#${last.n}) — ${last.winner} won · click to return`));
     for (const p of last.plays) {
       const symbol = p.card[0];
-      const suitKlass = (symbol === "♥" || symbol === "♦") ? "suit-red" : "suit-black";
+      const suitKlass = suitClassFromSymbol(symbol);
       const pos = seatToPosition[p.seat];
       const posKlass = pos ? `center-trick-${pos}` : "";
       center.appendChild(el("div", { class: `trick-card ${suitKlass} ${posKlass}` }, p.card));
@@ -395,9 +440,7 @@ function renderTable(state) {
   if (state.complete) {
     const r = state.result;
     const declSym = state.strain_symbol;
-    const declKlass =
-      declSym === "♥" || declSym === "♦" ? "suit-red" :
-      declSym === "♠" || declSym === "♣" ? "suit-black" : "";
+    const declKlass = suitClassFromSymbol(declSym);
     const made = r.declarer_tricks >= state.tricks_needed;
     const main = el("div", { class: "result-big" });
     main.appendChild(document.createTextNode(state.level + ""));
@@ -425,7 +468,7 @@ function renderTable(state) {
   for (const p of state.current_trick) {
     const c = p.card;
     const symbol = c[0];
-    const suitKlass = (symbol === "♥" || symbol === "♦") ? "suit-red" : "suit-black";
+    const suitKlass = suitClassFromSymbol(symbol);
     const pos = seatToPosition[p.seat];
     const posKlass = pos ? `center-trick-${pos}` : "";
     center.appendChild(el("div", { class: `trick-card ${suitKlass} ${posKlass}` }, c));
@@ -452,11 +495,16 @@ function render(state) {
   lastState = state;
   bumpImpsIfNeeded(state);
   applyTutorialMask(state);
+  // Same spoiler rule as renderContractDisplay — drop the contract from the
+  // status line until the auction is fully revealed.
+  const statusContract = auctionAnimating ? "?" : state.contract_str;
   document.getElementById("status-line").textContent =
-    `${state.scenario} · Deal ${state.board_num} · ${state.contract_str}`;
+    `${state.scenario} · Deal ${state.board_num} · ${statusContract}`;
   document.getElementById("game").hidden = false;
   document.getElementById("claim-btn").disabled = state.complete;
   document.getElementById("undo-btn").disabled = !state.can_undo;
+  document.getElementById("hint-btn").disabled =
+    state.complete || !(state.trick_history && state.trick_history.length > 0);
   renderAuction(state);
   renderContractDisplay(state);
   renderTable(state);
@@ -464,6 +512,35 @@ function render(state) {
   renderTrickSummary(state);
   renderResult(state);
   renderCoachingPanel();
+  if (state.complete) maybeFirePostPlayTip(state);
+}
+
+// Fire the post-play assessment tip(s) once per session, as soon as the deal
+// completes. Fire-and-forget — presentTipsForStage manages its own Continue
+// gate, and the render loop will keep working in parallel.
+let postPlayTipFiredFor = null;
+async function maybeFirePostPlayTip(state) {
+  if (!sessionId || postPlayTipFiredFor === sessionId) return;
+  postPlayTipFiredFor = sessionId;
+  const tips = Array.isArray(state.tips) ? state.tips : [];
+  const role = state.role || "declarer";
+  // Runtime context: prepend a small line showing the actual final result.
+  // The offline tip prose was authored against BBA's [Result] which may
+  // differ from how the user played — this line keeps it accurate.
+  const prefix = postPlayContextLine(state);
+  await presentTipsForStage(tips, "post-play", role, prefix);
+}
+
+function postPlayContextLine(state) {
+  if (!state || !state.result) return "";
+  const r = state.result;
+  const made = r.declarer_tricks;
+  const dd = r.dd_tricks;
+  const offset = r.result_offset;
+  const tag = offset === 0 ? "made exactly"
+            : offset > 0  ? `made +${offset}`
+            : `down ${-offset}`;
+  return `Declarer took ${made} tricks (${tag}; double-dummy par: ${dd}).`;
 }
 
 // ---------- actions ----------
@@ -544,6 +621,8 @@ async function startSession() {
     tutorialReveals = new Set();
     tutorialContinueResolve = null;
     bidQuizResolve = null;
+    startPlayInFlight = false;
+    postPlayTipFiredFor = null;
     document.getElementById("inference-panel").hidden = true;
     document.getElementById("result-panel").hidden = true;
     document.getElementById("next-deal-btn").disabled = false;
@@ -552,6 +631,7 @@ async function startSession() {
     document.getElementById("review-btn").disabled = false;
     document.getElementById("picker-hint").textContent = "";
     viewingLastTrick = false;
+    viewingTrickIndex = null;
     trickFreeze = null;
     awaitingPlay = false;
     render(data.state);
@@ -657,8 +737,10 @@ async function animateAuction(state) {
   // Bid-by-bid mode. Group coaching chunks by bid_index for fast lookup.
   const chunkByBid = new Map();
   const introChunks = [];
+  const postAuctionChunks = [];
   for (const ch of state.coaching) {
     if (ch.bid_index === null || ch.bid_index === undefined) introChunks.push(ch);
+    else if (ch.bid_index === "post-auction") postAuctionChunks.push(ch);
     else {
       if (!chunkByBid.has(ch.bid_index)) chunkByBid.set(ch.bid_index, []);
       chunkByBid.get(ch.bid_index).push(ch);
@@ -669,10 +751,20 @@ async function animateAuction(state) {
   auctionVisibleCount = 0;
   render(lastState);
 
-  // Intro chunk(s): show before the auction starts.
+  // Intro chunk(s): push them into the coaching panel passively (no Continue
+  // gate). The student's first bid quiz appears immediately after, so the
+  // user reads the intro and makes the opening call without an extra click.
+  // Text-empty chunks (a bare [show S] reveal) skip the panel entirely.
   for (const ch of introChunks) {
     if (myToken !== auctionAnimationToken) return;
-    await presentChunk(ch);
+    if (!ch.text || !ch.text.trim()) {
+      for (const tok of (ch.reveals || [])) {
+        for (const seat of expandRevealToken(tok)) tutorialReveals.add(seat);
+      }
+      if (lastState) render(lastState);
+      continue;
+    }
+    await presentChunkPassive(ch, 0);
   }
 
   const totalCalls = (state.auction || []).length;
@@ -685,7 +777,10 @@ async function animateAuction(state) {
     if (myToken !== auctionAnimationToken) return;
     const call = state.auction[i];
     const chunks = chunkByBid.get(i) || [];
-    const isStudentBid = call.seat === "S" && call.call !== "Pass";
+    // Quiz the student on every call from their seat — including Pass. A
+     // Pass after partner's raise is a real decision (sign off vs. push to
+     // game) and the user has asked to be prompted on it.
+    const isStudentBid = call.seat === "S";
 
     // Quiz the student before each of their non-pass calls. Display-S is
     // always the student after the server's rotation override. Two attempts:
@@ -731,18 +826,42 @@ async function animateAuction(state) {
 
     auctionVisibleCount = i + 1;
     render(lastState);
+    // Bid-anchored chunks fire passively — the text lands in the coaching
+    // panel and the auction continues after a brief pause. No Continue
+    // gate, so partner's response (and the user's own bid explanation)
+    // flow naturally with the auction rather than forcing clicks.
     for (const ch of chunks) {
       if (myToken !== auctionAnimationToken) return;
-      await presentChunk(ch);
+      await presentChunkPassive(ch, AUCTION_CHUNK_PAUSE_MS);
     }
   }
 
+  if (myToken !== auctionAnimationToken) return;
+  // Post-auction chunks fire after every bid is revealed (including the
+  // student's final pass) — lets contract-summary prose follow the student's
+  // decision instead of spoiling it inside the [BID 2X] chunk.
+  for (const ch of postAuctionChunks) {
+    if (myToken !== auctionAnimationToken) return;
+    await presentChunk(ch);
+  }
   if (myToken !== auctionAnimationToken) return;
   auctionAnimating = false;
   auctionVisibleCount = null;
   awaitingPlay = totalCalls > 0;
   render(lastState);
+  // Auto-trigger play after a short pause so the user has a beat to absorb
+  // the final auction. Clicking Play (or anything that fires startPlay)
+  // before the timer fires just runs it sooner — the in-flight guard
+  // prevents double-firing.
+  if (awaitingPlay) {
+    await sleep(AUCTION_END_AUTO_PLAY_MS);
+    if (myToken !== auctionAnimationToken) return;
+    if (awaitingPlay && !startPlayInFlight) startPlay();
+  }
 }
+
+const AUCTION_END_AUTO_PLAY_MS = 3000;
+const POST_LEAD_TIP_DELAY_MS = 2500;
 
 // Push a coaching chunk's text into the panel, merge its [show] reveals,
 // re-render to update the mask, and pause until the user clicks Continue.
@@ -757,6 +876,46 @@ async function presentChunk(chunk) {
   }
   if (lastState) render(lastState);
   await waitForContinue();
+}
+
+// Passive variant: push chunk text + reveals into the panel without a
+// Continue gate. Used for bid-anchored chunks during the auction animation
+// — the user reads the explanation as the auction flows past, no clicks.
+async function presentChunkPassive(chunk, pauseMs) {
+  if (chunk.text) {
+    coachingTips.push({ text: chunk.text });
+  }
+  for (const tok of (chunk.reveals || [])) {
+    for (const seat of expandRevealToken(tok)) {
+      tutorialReveals.add(seat);
+    }
+  }
+  if (lastState) render(lastState);
+  renderCoachingPanel();
+  if (pauseMs > 0) await sleep(pauseMs);
+}
+
+const AUCTION_CHUNK_PAUSE_MS = 3000;
+
+// Card-play tip labels — prefix each chunk so the panel header signals which
+// trigger point the prose belongs to. The tip prose itself stays vantage-pure.
+function tipStageLabel(stage, role) {
+  if (stage === "auction-end") return "After the bidding";
+  if (stage === "pre-lead") return "Choosing your opening lead";
+  if (stage === "post-lead") return role === "declarer" ? "Planning the play" : "Reading the lead";
+  if (stage === "post-play") return "Looking back";
+  return "";
+}
+
+async function presentTipsForStage(tips, stage, role, prefix) {
+  for (const t of tips) {
+    if (t.stage !== stage) continue;
+    const label = tipStageLabel(stage, role);
+    const head = label ? `${label} — ` : "";
+    const pre = prefix ? `${prefix} ` : "";
+    const text = `${head}${pre}${t.text}`;
+    await presentChunk({ text, reveals: t.reveals || [] });
+  }
 }
 
 function waitForContinue() {
@@ -819,18 +978,50 @@ function formatBidForDisplay(s) {
   return `${m[1]}${STRAIN_GLYPH[m[2]]}`;
 }
 
+// Rank ordering: 1C=1, 1D=2, 1H=3, 1S=4, 1NT=5, 2C=6, …, 7NT=35. Pass/X/XX
+// don't raise the bar — only suit/NT bids do.
+const STRAIN_RANK = { C: 1, D: 2, H: 3, S: 4, NT: 5 };
+function bidRank(call) {
+  const norm = normaliseBidForCompare(call);
+  if (norm === "PASS" || norm === "X" || norm === "XX") return 0;
+  const m = norm.match(/^(\d+)(NT|C|D|H|S)$/);
+  if (!m) return 0;
+  return (parseInt(m[1], 10) - 1) * 5 + STRAIN_RANK[m[2]];
+}
+
+// Highest level+strain bid revealed so far in the current auction animation.
+// auctionVisibleCount is the index of the call ABOUT to be quizzed, so prior
+// calls live at indices 0 … auctionVisibleCount-1.
+function highestBidSoFarRank() {
+  if (!lastState || !Array.isArray(lastState.auction)) return 0;
+  let hi = 0;
+  const upto = Math.min(auctionVisibleCount || 0, lastState.auction.length);
+  for (let i = 0; i < upto; i++) {
+    const r = bidRank(lastState.auction[i].call);
+    if (r > hi) hi = r;
+  }
+  return hi;
+}
+
 function renderBidBox() {
   const box = el("div", { class: "bid-quiz-box" });
   box.appendChild(el("div", { class: "bid-quiz-prompt" }, "What do you bid?"));
 
+  const minLegalRank = highestBidSoFarRank() + 1;
   const grid = el("div", { class: "bid-quiz-grid" });
   for (let level = 1; level <= 7; level++) {
     for (const strain of STRAINS) {
       const code = `${level}${strain}`;
-      const cell = el("button", {
-        class: `bid-quiz-btn ${strain === "H" || strain === "D" ? "suit-red" : "suit-black"}`,
-        onclick: () => onBidQuizClick(code),
-      });
+      const sufficient = bidRank(code) >= minLegalRank;
+      const attrs = {
+        class: `bid-quiz-btn ${suitClass(strain)}`,
+      };
+      if (sufficient) {
+        attrs.onclick = () => onBidQuizClick(code);
+      } else {
+        attrs.disabled = true;
+      }
+      const cell = el("button", attrs);
       cell.appendChild(document.createTextNode(level + ""));
       cell.appendChild(el("span", {}, STRAIN_GLYPH[strain]));
       grid.appendChild(cell);
@@ -849,7 +1040,13 @@ function renderBidBox() {
   return box;
 }
 
+let startPlayInFlight = false;
 async function startPlay() {
+  // Re-entry guard: the Play button stays visible until the post-lead tips
+  // finish; a second click (or any render that re-paints the button) would
+  // otherwise push the auction-end tip a second time.
+  if (startPlayInFlight) return;
+  startPlayInFlight = true;
   // Skip past any tutorial pause that's still up, then close the auction
   // overlay so play can begin.
   if (tutorialContinueResolve) {
@@ -857,9 +1054,27 @@ async function startPlay() {
     tutorialContinueResolve = null;
     r();
   }
+
+  // Hide the Play button immediately so it can't be re-clicked during the
+  // tip Continue gates.
   awaitingPlay = false;
   auctionVisibleCount = null;
   auctionAnimating = false;
+  if (lastState) render(lastState);
+
+  // Card-play tips, role-filtered on the server. Stage ordering depends on
+  // role:
+  //   leader     → auction-end + pre-lead fire BEFORE the lead (user picks)
+  //   declarer/defender → lead happens automatically; tips fire AFTER, so the
+  //                       user sees the lead + dummy without click-throughs
+  const tips = (lastState && Array.isArray(lastState.tips)) ? lastState.tips : [];
+  const role = (lastState && lastState.role) || "declarer";
+
+  if (role === "leader") {
+    await presentTipsForStage(tips, "auction-end", role);
+    await presentTipsForStage(tips, "pre-lead", role);
+  }
+
   // Tutorial reveals end with the auction — server's visible_hands() rule
   // takes over (e.g. dummy hidden until after the opening lead).
   tutorialReveals = new Set();
@@ -868,10 +1083,21 @@ async function startPlay() {
     try {
       const data = await api(`/api/session/${sessionId}/start-play`, { method: "POST" });
       render(data.state);
+      // For declarer/defender the server's auto_play_until_user has just
+      // played the opening lead and dummy is now visible — pause briefly so
+      // the user can absorb the lead + dummy, then fire auction-end and
+      // post-lead tips together. (auction-end is moved here from pre-lead so
+      // the user reaches the lead/dummy without a Continue gate.)
+      if (role === "declarer" || role === "defender") {
+        await sleep(POST_LEAD_TIP_DELAY_MS);
+        await presentTipsForStage(tips, "auction-end", role);
+        await presentTipsForStage(tips, "post-lead", role);
+      }
     } catch (e) {
       console.warn("start-play failed:", e);
     }
   }
+  startPlayInFlight = false;
 }
 
 function startReview() {
@@ -891,6 +1117,7 @@ async function replayDeal() {
   try {
     const data = await api(`/api/session/${sessionId}/replay`, { method: "POST" });
     viewingLastTrick = false;
+    viewingTrickIndex = null;
     trickFreeze = null;
     render(data.state);
   } catch (e) {
@@ -898,11 +1125,100 @@ async function replayDeal() {
   }
 }
 
+// On-demand Hint: scan the trick history and surface the bridge bookkeeping
+// the user can deduce from what's been played — cards still out per suit,
+// who has shown out of which suit, and the location of high cards already
+// played. No "AI" — just counting. Renders as a coaching-panel card.
+function showHint() {
+  if (!lastState || !lastState.trick_history) return;
+  const lines = computeHintLines(lastState);
+  if (lines.length === 0) {
+    coachingTips.push({ text: "Hint — nothing inferable yet from the trick history." });
+  } else {
+    coachingTips.push({ text: "Hint — " + lines.join(" ") });
+  }
+  renderCoachingPanel();
+}
+
+function computeHintLines(state) {
+  const SUITS = [
+    { sym: "♠", key: "spades" },
+    { sym: "♥", key: "hearts" },
+    { sym: "♦", key: "diamonds" },
+    { sym: "♣", key: "clubs" },
+  ];
+  const ALL_RANKS = "AKQJT98765432".split("");
+  const RANK_ORDER = Object.fromEntries(ALL_RANKS.map((r, i) => [r, i]));
+
+  // 1. Cards played per seat (from the server state)
+  const playedBySeat = state.cards_played_by_seat || { N:[], E:[], S:[], W:[] };
+
+  // 2. Show-outs: any seat that failed to follow suit on a trick where the
+  //    led suit was something else. (Suit symbol is the first char of card.)
+  const showouts = { N:new Set(), E:new Set(), S:new Set(), W:new Set() };
+  for (const t of (state.trick_history || [])) {
+    if (!t.plays || t.plays.length === 0) continue;
+    const ledSuit = t.plays[0].card[0];
+    for (const p of t.plays) {
+      if (p.card[0] !== ledSuit) showouts[p.seat].add(ledSuit);
+    }
+  }
+
+  // 3. For each suit, compute outstanding (unseen + unplayed) high cards.
+  //    "Unseen": not in any hand that's visible to the user AND not played.
+  const lines = [];
+  for (const s of SUITS) {
+    // Collect all ranks played in this suit
+    const played = new Set();
+    for (const cards of Object.values(playedBySeat)) {
+      for (const c of cards) {
+        if (c[0] === s.sym) played.add(c.slice(1));
+      }
+    }
+    // Collect all ranks visible in the hands the user can see
+    const visible = new Set();
+    for (const seat of ["N", "E", "S", "W"]) {
+      const hand = (state.hands || {})[seat];
+      if (!hand) continue;
+      const ranks = hand[s.key] || "";
+      for (const r of ranks.split("")) visible.add(r);
+    }
+    // Outstanding = all - played - visible
+    const outstanding = ALL_RANKS.filter(r => !played.has(r) && !visible.has(r));
+    if (outstanding.length === 0) continue;
+    // Pick out honors (A,K,Q,J,T) and total length
+    const honors = outstanding.filter(r => "AKQJT".includes(r)).sort((a,b) => RANK_ORDER[a] - RANK_ORDER[b]);
+    const totalOut = outstanding.length;
+    let line = `${s.sym}${honors.join("")}${honors.length < totalOut ? "+" : ""} out (${totalOut} card${totalOut===1?"":"s"})`;
+    lines.push(line + ".");
+  }
+
+  // 4. Show-out callouts
+  for (const seat of ["N", "E", "S", "W"]) {
+    if (showouts[seat].size === 0) continue;
+    const labeled = userRelativeLabel(seat, state);
+    if (!labeled) continue;  // only call out hidden hands (LHO/RHO from user's seat)
+    const suits = Array.from(showouts[seat]).join("");
+    lines.push(`${labeled} void in ${suits}.`);
+  }
+
+  return lines;
+}
+
+function userRelativeLabel(seat, state) {
+  // Translate a display-frame seat letter into user-relative term. The user
+  // always sits at display-S; LHO=W, Partner=N, RHO=E in display frame.
+  // We only emit hints about seats the user can't see (opponents).
+  const map = { W: "LHO", E: "RHO" };
+  return map[seat] || null;  // skip N (partner/dummy) and S (own)
+}
+
 async function undoLast() {
   if (!sessionId || trickFreeze) return;
   try {
     const data = await api(`/api/session/${sessionId}/undo`, { method: "POST" });
     viewingLastTrick = false;
+    viewingTrickIndex = null;
     render(data.state);
   } catch (e) {
     alert("Couldn't undo: " + e.message);
@@ -963,11 +1279,14 @@ function renderCoachingPanel() {
   if (bidQuizResolve) {
     body.appendChild(renderBidBox());
   } else if (tutorialContinueResolve) {
+    // When the deal is over (post-play tip is the final thing), Continue
+    // does nothing useful — relabel and rewire it to start the next deal.
+    const isEndOfDeal = lastState && lastState.complete;
     const cont = el("button", {
       id: "coach-continue-btn",
       class: "primary",
-      onclick: onContinueClick,
-    }, "Continue");
+      onclick: isEndOfDeal ? () => { onContinueClick(); nextDeal(); } : onContinueClick,
+    }, isEndOfDeal ? "Next deal" : "Continue");
     body.appendChild(cont);
   }
   // Auto-scroll to the newest tip so older ones can be reached above.
@@ -982,6 +1301,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("claim-btn").addEventListener("click", claimRest);
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);
+  document.getElementById("hint-btn").addEventListener("click", showHint);
   const reviewBtn = document.getElementById("review-btn");
   // Pointer capture keeps pointerup firing on the button even if the cursor
   // drifts off mid-press, so the auction stays up while the user holds.

@@ -8,6 +8,8 @@
   --accent: #1f5d8c;
   --accent-soft: #d5e4f1;
   --red: #b3261e;
+  --diamond: #c2580a;  /* 4-color deck: diamonds orange */
+  --club: #0b6e3b;     /* 4-color deck: clubs green */
 }
 
 * { box-sizing: border-box; }
@@ -260,7 +262,9 @@ button.primary:hover { background: #16456a; }
   font-weight: 700;
   line-height: 1.1;
 }
-.contract-line-main .suit-red { color: var(--red); }
+.contract-line-main .suit-heart { color: var(--red); }
+.contract-line-main .suit-diamond { color: var(--diamond); }
+.contract-line-main .suit-club { color: var(--club); }
 .contract-line-sub {
   font-size: 0.95rem;
   color: var(--muted);
@@ -292,6 +296,17 @@ button.primary:hover { background: #16456a; }
 
 .suit-red { color: var(--red); }
 .suit-black { color: var(--ink); }
+.suit-spade { color: var(--ink); }
+.suit-heart { color: var(--red); }
+.suit-diamond { color: var(--diamond); }
+.suit-club { color: var(--club); }
+/* Pump suit symbols up ~25% above the surrounding text. Scales with parent
+   font-size so hand cards, coaching prose, bid grid etc. all benefit. */
+.suit-spade, .suit-heart, .suit-diamond, .suit-club {
+  font-size: 1.5em;
+  line-height: 1;
+  vertical-align: -0.1em;
+}
 
 .seat.face-down {
   background: repeating-linear-gradient(
@@ -331,7 +346,9 @@ button.primary:hover { background: #16456a; }
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
-.played-card.suit-red { color: var(--red); }
+.played-card.suit-heart { color: var(--red); }
+.played-card.suit-diamond { color: var(--diamond); }
+.played-card.suit-club { color: var(--club); }
 
 #slot-top         { grid-column: 2; grid-row: 1; }
 #slot-left        { grid-column: 1; grid-row: 2; }
@@ -453,6 +470,11 @@ button.primary:hover { background: #16456a; }
   border: 4px solid var(--accent); /* blue outline separates stacked cards */
   box-shadow: 0 1px 2px rgba(0,0,0,0.15);
   margin-left: -18px;
+  cursor: pointer;
+}
+.trick-back-selected {
+  border-color: #f0b400; /* yellow ring so the currently-shown trick stands out */
+  box-shadow: 0 0 0 3px rgba(240, 180, 0, 0.35);
 }
 .trick-back:first-child { margin-left: 0; }
 .trick-back.ours {
@@ -502,7 +524,9 @@ button.primary:hover { background: #16456a; }
 }
 
 
-.card-btn.suit-red { color: var(--red); }
+.card-btn.suit-heart { color: var(--red); }
+.card-btn.suit-diamond { color: var(--diamond); }
+.card-btn.suit-club { color: var(--club); }
 
 .card-btn.legal {
   cursor: pointer;
@@ -759,9 +783,14 @@ button.primary:hover { background: #16456a; }
   border-radius: 4px;
   cursor: pointer;
 }
-.bid-quiz-btn:hover {
+.bid-quiz-btn:hover:not([disabled]) {
   background: #fff8e3;
   border-color: #a8a08b;
+}
+.bid-quiz-btn[disabled] {
+  opacity: 0.25;
+  cursor: not-allowed;
+  background: #f0ece1;
 }
 .bid-quiz-call {
   flex: 1;

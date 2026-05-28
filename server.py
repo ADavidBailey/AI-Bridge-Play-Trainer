@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from endplay.types import Player, Denom, Rank, Deal, Contract, Vul, Penalty
+from endplay.types import Player, Denom, Rank, Deal, Contract, Vul, Penalty, Card
 from endplay.dds import solve_board, calc_dd_table
 from endplay.parsers import pbn
 
@@ -225,6 +225,14 @@ def _auction_pbn_calls(auction) -> list[str]:
 
 _SHOW_RE = re.compile(r'\[show\s+([^\]]+)\]', re.IGNORECASE)
 _BID_RE = re.compile(r'\[BID\s+([^\]]+)\]', re.IGNORECASE)
+_POST_AUCTION_RE = re.compile(r'\[POST-AUCTION\]', re.IGNORECASE)
+_ROLE_STAGE_RE = re.compile(
+    r'\[ROLE\s+(declarer|leader|defender)\]\s*\[STAGE\s+(auction-end|pre-lead|post-lead|post-play)\]',
+    re.IGNORECASE,
+)
+# Tip chunks live in the same {...} block as the bidding-tutorial chunks. They
+# start at the first [ROLE ...] marker; everything before that is bidding prose.
+_ROLE_MARKER_RE = re.compile(r'\[ROLE\s+', re.IGNORECASE)
 
 
 def _extract_reveals(prose: str) -> tuple[list[str], str]:
@@ -240,6 +248,16 @@ def _extract_reveals(prose: str) -> tuple[list[str], str]:
 def _substitute_suits(text: str) -> str:
     return (text.replace("\\S", "♠").replace("\\H", "♥")
                 .replace("\\D", "♦").replace("\\C", "♣"))
+
+
+def _split_bidding_and_tips(body: str) -> tuple[str, str]:
+    """A coaching block may hold bid-anchored tutorial chunks followed by
+    role/stage-anchored card-play tips. The tips section, if any, starts at
+    the first [ROLE ...] marker. Returns (bidding_section, tips_section)."""
+    m = _ROLE_MARKER_RE.search(body)
+    if m is None:
+        return body, ""
+    return body[:m.start()], body[m.start():]
 
 
 def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict] | None:
@@ -261,6 +279,18 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
     if close_pos == -1:
         return None
     body = _substitute_suits(tail[open_pos + 1:close_pos])
+    body, _ = _split_bidding_and_tips(body)
+
+    # Split out [POST-AUCTION] section if present — chunks here fire after the
+    # auction has fully revealed (after the last bid is quizzed/animated),
+    # before the awaitingPlay/Play button. Lets contract-summary prose follow
+    # the student's final bid rather than spoiling it.
+    post_m = _POST_AUCTION_RE.search(body)
+    if post_m:
+        post_body = body[post_m.end():]
+        body = body[:post_m.start()]
+    else:
+        post_body = ""
 
     parts = _BID_RE.split(body)
     chunks: list[dict] = []
@@ -301,7 +331,77 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
             used.add(bid_idx)
             chunks.append({"bid_index": bid_idx, "reveals": reveals, "text": text})
 
+    if post_body.strip():
+        reveals, text = _extract_reveals(post_body)
+        if text or reveals:
+            chunks.append({"bid_index": "post-auction", "reveals": reveals, "text": text})
+
     return chunks if chunks else None
+
+
+# Extract the first specific card mention from a leader pre-lead tip — e.g.
+# "Lead the ♥2" → (Denom.hearts, Rank.R2). Returns None if no card-shaped
+# token can be found; callers fall back to DDS for the opening lead.
+_LEAD_CARD_RE = re.compile(r'(?:^|\s|—)([♠♥♦♣])([2-9TJQKA])\b')
+_DENOM_FROM_SYM = {"♠": Denom.spades, "♥": Denom.hearts, "♦": Denom.diamonds, "♣": Denom.clubs}
+
+def extract_recommended_lead(tips: list[dict]) -> Card | None:
+    """Find the textbook opening-lead card the leader pre-lead tip recommends.
+    Convention: every leader pre-lead tip starts with 'Lead the ♥2' or similar,
+    so the first ♠/♥/♦/♣<rank> token is the recommended card."""
+    pre = next((t for t in tips if t.get("role") == "leader" and t.get("stage") == "pre-lead"), None)
+    if pre is None:
+        return None
+    m = _LEAD_CARD_RE.search(pre.get("text", ""))
+    if not m:
+        return None
+    sym, rank_ch = m.group(1), m.group(2)
+    denom = _DENOM_FROM_SYM.get(sym)
+    rank = RANK_FROM_CHAR.get(rank_ch)
+    if denom is None or rank is None:
+        return None
+    return Card(suit=denom, rank=rank)
+
+
+def parse_tips(raw_pbn_text: str) -> list[dict]:
+    """Parse role/stage-anchored card-play tip chunks out of the post-auction
+    {...} block. Returns [] if no [ROLE ...] markers are present.
+
+    Each tip: {"role": "declarer"|"leader"|"defender",
+               "stage": "auction-end"|"pre-lead"|"post-lead",
+               "reveals": list[str],   # real-compass seat letters, usually unused
+               "text": str}            # suit escapes already substituted
+
+    Tips are written from a single role's vantage and only describe information
+    the role can see at that stage — the offline generator enforces this; the
+    parser does no information-leakage check."""
+    auction_match = re.search(r'\[Auction\s+"[^"]*"\]', raw_pbn_text)
+    if not auction_match:
+        return []
+    tail = raw_pbn_text[auction_match.end():]
+    open_pos = tail.find('{')
+    if open_pos == -1:
+        return []
+    close_pos = tail.find('}', open_pos)
+    if close_pos == -1:
+        return []
+    body = _substitute_suits(tail[open_pos + 1:close_pos])
+    _, tips_section = _split_bidding_and_tips(body)
+    if not tips_section:
+        return []
+
+    tips: list[dict] = []
+    matches = list(_ROLE_STAGE_RE.finditer(tips_section))
+    for i, m in enumerate(matches):
+        role = m.group(1).lower()
+        stage = m.group(2).lower()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(tips_section)
+        prose = tips_section[start:end]
+        reveals, text = _extract_reveals(prose)
+        if text:
+            tips.append({"role": role, "stage": stage, "reveals": reveals, "text": text})
+    return tips
 
 
 # ---------- session state ----------
@@ -355,6 +455,17 @@ class Session:
         # None means the scenario file has no embedded tutorial — frontend then
         # uses the existing instant-reveal path.
         self.coaching: list[dict] | None = None
+        # Card-play tips, already filtered to this session's role. Stages:
+        # "auction-end" (all roles), "pre-lead" (leader only), "post-lead"
+        # (declarer + defender). Empty when the PBN ships no [ROLE]/[STAGE]
+        # markers — frontend just skips the tip-phase pause.
+        self.tips: list[dict] = []
+        # Textbook opening lead card, extracted from the leader pre-lead tip
+        # at session start. When role != leader, auto_play_until_user uses
+        # this in place of dds_pick for the opening lead, so the table
+        # matches the prose tips (DDS otherwise picks a tactical lead that
+        # might disagree with the textbook reasoning).
+        self.recommended_lead: Card | None = None
         # Full log of cards played, in chronological order. We rebuild deal
         # state from scratch when undoing, since endplay's unplay() can't
         # cross trick boundaries.
@@ -519,6 +630,7 @@ class Session:
         # Coaching chunks stay in the author's real-compass frame; the
         # frontend uses rotation_shift to map [show N] → display seat.
         st["coaching"] = self.coaching
+        st["tips"] = self.tips
         st["rotation_shift"] = self._rotation_shift
         # All four initial hands — only consulted by the frontend during the
         # tutorial phase, where the [show X] directives need to reveal hands
@@ -592,7 +704,17 @@ class Session:
         """After a user play, run DDS for any defender/dummy-seat-the-computer-controls turns
         until it's user's turn again, or the deal completes."""
         while not self.complete and self.deal.curplayer not in self.user_seats:
-            card = dds_pick(self.deal)
+            # On the opening lead, prefer the textbook card from the leader
+            # pre-lead tip (when available and legal) so the post-lead tip
+            # prose matches what's actually on the table. Fall back to DDS
+            # if the card isn't extractable or isn't a legal lead.
+            if (self.cards_played_count == 0
+                    and self.deal.curplayer == self.leader
+                    and self.recommended_lead is not None
+                    and self.recommended_lead in list(self.deal.legal_moves())):
+                card = self.recommended_lead
+            else:
+                card = dds_pick(self.deal)
             self._play_card(card)
 
     def _apply_card(self, card):
@@ -759,14 +881,28 @@ def start_session(body: StartSessionBody):
         sess.coaching = parse_coaching(
             board_slices[idx], _auction_pbn_calls(boards[idx].auction)
         )
-    # When the scenario ships with embedded coaching, the prose addresses
-    # the student as "you" — convention is Student=S (real). Override the
-    # role-derived seat so south sits at the bottom of the table and the
-    # user controls whichever side south ends up on.
+        all_tips = parse_tips(board_slices[idx])
+        sess.tips = [t for t in all_tips if t["role"] == sess.role]
+        # Read the recommended lead from the leader pre-lead tip across ALL
+        # roles' tips (not just the user's) — the user might be playing
+        # declarer or defender but we still need the leader's textbook card.
+        sess.recommended_lead = extract_recommended_lead(all_tips)
+    # When the scenario ships with embedded coaching, the bidding tutorial
+    # addresses the student as "you" — convention is Student=S (real). Override
+    # the role-derived seat so south sits at the bottom of the table and the
+    # user controls whichever side south ends up on. Only meaningful when the
+    # user is playing the student's role (declarer in these scenarios); for
+    # role=leader/defender we keep the user at their chosen seat and suppress
+    # the bidding tutorial (which is student-addressed) so it doesn't read as
+    # "you bid 1H" to someone who didn't bid. Card-play tips are role-filtered
+    # on the server and still flow.
     if sess.coaching is not None:
-        student_letter = boards[idx].info.get("Student", "S")
-        student = LETTER_SEAT.get(student_letter, Player.south)
-        sess.set_student_seat(student)
+        if sess.role == "declarer":
+            student_letter = boards[idx].info.get("Student", "S")
+            student = LETTER_SEAT.get(student_letter, Player.south)
+            sess.set_student_seat(student)
+        else:
+            sess.coaching = None
     # NOTE: deliberately NOT calling sess.auto_play_until_user() here. The
     # client calls /start-play once the user clicks the Play button so any
     # end-of-auction coaching has a chance to fire while cards_played_count
