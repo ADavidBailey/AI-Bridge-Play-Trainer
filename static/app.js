@@ -832,15 +832,27 @@ async function animateAuction(state) {
         await sleep(AUCTION_PRE_QUIZ_MS);
         if (myToken !== auctionAnimationToken) return;
       }
+      // Acceptable answers: the call actually made, plus any [ACCEPT ...]
+      // alternatives on this bid's chunk(s) — for judgment decisions where more
+      // than one call is defensible (e.g. Pass or 3NT after 1NT-2NT with 16).
+      const altCalls = [];
+      for (const ch of chunks) for (const a of (ch.accept || [])) altCalls.push(a);
+      const acceptDisplay = [call.call, ...altCalls];
+      const acceptableNorm = new Set(acceptDisplay.map(normaliseBidForCompare));
+      const multiOk = acceptableNorm.size > 1;
+      const acceptPhrase = acceptDisplay.map(formatBidForDisplay).join(" or ");
+
       let revealed = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
         const pick = await presentBidQuiz(call.call);
         if (myToken !== auctionAnimationToken) return;
-        const ok = normaliseBidForCompare(pick) === normaliseBidForCompare(call.call);
+        const ok = acceptableNorm.has(normaliseBidForCompare(pick));
         if (ok) {
           coachingTips.push({
             quizResult: "ok",
-            text: `✓ Correct — you bid ${formatBidForDisplay(pick)}. Nice.`,
+            text: multiOk
+              ? `✓ Good call — you bid ${formatBidForDisplay(pick)}. Either ${acceptPhrase} is fine here.`
+              : `✓ Correct — you bid ${formatBidForDisplay(pick)}. Nice.`,
           });
           revealed = true;
           break;
@@ -854,7 +866,9 @@ async function animateAuction(state) {
         } else {
           coachingTips.push({
             quizResult: "miss",
-            text: `✗ Still not it — you bid ${formatBidForDisplay(pick)}. The textbook call here is ${formatBidForDisplay(call.call)}.`,
+            text: multiOk
+              ? `✗ Still not it — you bid ${formatBidForDisplay(pick)}. Here either ${acceptPhrase} works.`
+              : `✗ Still not it — you bid ${formatBidForDisplay(pick)}. The textbook call here is ${formatBidForDisplay(call.call)}.`,
           });
           revealed = true;
         }

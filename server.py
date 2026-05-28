@@ -245,6 +245,42 @@ def _extract_reveals(prose: str) -> tuple[list[str], str]:
     return reveals, cleaned
 
 
+# A [show S] reveal only exposes the student's own hand, so it's fine while the
+# auction is still on screen. Any other reveal exposes a hand the student can't
+# yet see (partner's dummy, opponents), so its prose is held back.
+_SELF_SEATS = {"S"}
+
+
+def _split_deferred_reveal(prose: str) -> tuple[str, str]:
+    """Split a chunk's prose at the first [show ...] that reveals a hand beyond
+    the student's own. Text up to that token stays in place (shown while its
+    bid is on screen); the token and everything after it are deferred so they
+    can be folded into the post-auction chunk, where the dummy is visible. This
+    keeps bidding realistic — partner's hand isn't described until it's down."""
+    for m in _SHOW_RE.finditer(prose):
+        seats = {c for c in m.group(1).upper() if c in "NESW"}
+        if not seats <= _SELF_SEATS:
+            return prose[:m.start()], prose[m.start():]
+    return prose, ""
+
+
+_ACCEPT_RE = re.compile(r'\[ACCEPT\s+([^\]]+)\]', re.IGNORECASE)
+
+
+def _extract_accept(prose: str) -> tuple[list[str], str]:
+    """Pull [ACCEPT call ...] tokens from a bid chunk. These mark extra calls
+    the quiz should treat as correct alongside the bid actually made — used for
+    judgment decisions where more than one call is defensible (e.g. accept Pass
+    or 3NT after 1NT-2NT with a middling hand). Returns (accepts, cleaned)."""
+    accepts: list[str] = []
+    def collect(m):
+        accepts.extend(tok for tok in m.group(1).split() if tok)
+        return ""
+    cleaned = _ACCEPT_RE.sub(collect, prose)
+    cleaned = re.sub(r'[ \t]+\n', '\n', cleaned).strip()
+    return accepts, cleaned
+
+
 def _substitute_suits(text: str) -> str:
     return (text.replace("\\S", "♠").replace("\\H", "♥")
                 .replace("\\D", "♦").replace("\\C", "♣"))
@@ -260,10 +296,16 @@ def _split_bidding_and_tips(body: str) -> tuple[str, str]:
     return body[:m.start()], body[m.start():]
 
 
-def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict] | None:
+def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str],
+                   student_indices: set[int] | None = None) -> list[dict] | None:
     """Parse the post-auction { ... } coaching block out of a single board's
     raw PBN text. Returns None if no such block exists; otherwise an ordered
     list of {"bid_index": int|None, "reveals": list[str], "text": str}.
+
+    student_indices are the auction positions belonging to the student. When a
+    [BID X] call name is ambiguous (e.g. several Pass calls), the student's own
+    call is preferred so judgment prose / [ACCEPT] tags anchor to the student's
+    decision rather than an opponent's identical call.
 
     Pre-auction `{Shape ...} {HCP ...} {Losers ...}` comment-style tags from
     the existing bba files are ignored — we only look at the slice AFTER the
@@ -294,7 +336,15 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
 
     parts = _BID_RE.split(body)
     chunks: list[dict] = []
-    intro_reveals, intro_text = _extract_reveals(parts[0])
+    # Prose introduced by a non-self [show] (partner/opponent reveal) is moved
+    # out of the mid-auction chunks and folded into the post-auction chunk, so
+    # a hand is only described once it's visible. See _split_deferred_reveal.
+    deferred_parts: list[str] = []
+
+    intro_mid, intro_deferred = _split_deferred_reveal(parts[0])
+    if intro_deferred:
+        deferred_parts.append(intro_deferred)
+    intro_reveals, intro_text = _extract_reveals(intro_mid)
     if intro_text or intro_reveals:
         chunks.append({"bid_index": None, "reveals": intro_reveals, "text": intro_text})
 
@@ -310,14 +360,19 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
     for i in range(1, len(parts), 2):
         bid_name = _norm_call(parts[i])
         prose = parts[i + 1] if i + 1 < len(parts) else ""
-        reveals, text = _extract_reveals(prose)
-        bid_idx = None
-        for j, call in enumerate(auction_pbn_calls):
-            if j in used:
-                continue
-            if _norm_call(call) == bid_name:
-                bid_idx = j
-                break
+        mid_prose, deferred = _split_deferred_reveal(prose)
+        if deferred:
+            deferred_parts.append(deferred)
+        accepts, mid_prose = _extract_accept(mid_prose)
+        reveals, text = _extract_reveals(mid_prose)
+        # Among unused indices matching this call name, prefer one belonging to
+        # the student so ambiguous calls (Pass) anchor to the student's own.
+        candidates = [j for j, call in enumerate(auction_pbn_calls)
+                      if j not in used and _norm_call(call) == bid_name]
+        if student_indices:
+            student_cands = [j for j in candidates if j in student_indices]
+            candidates = student_cands or candidates
+        bid_idx = candidates[0] if candidates else None
         if bid_idx is None:
             # Degrade to the previous successfully-anchored chunk so the prose
             # still surfaces. If there's no previous chunk, fall back to intro.
@@ -325,14 +380,22 @@ def parse_coaching(raw_pbn_text: str, auction_pbn_calls: list[str]) -> list[dict
                 merged = (chunks[-1]["text"] + "\n\n" + text).strip() if text else chunks[-1]["text"]
                 chunks[-1]["text"] = merged
                 chunks[-1]["reveals"].extend(reveals)
+                if accepts:
+                    chunks[-1].setdefault("accept", []).extend(accepts)
             else:
-                chunks.append({"bid_index": None, "reveals": reveals, "text": text})
+                chunks.append({"bid_index": None, "reveals": reveals, "text": text,
+                               "accept": accepts})
         else:
             used.add(bid_idx)
-            chunks.append({"bid_index": bid_idx, "reveals": reveals, "text": text})
+            chunks.append({"bid_index": bid_idx, "reveals": reveals, "text": text,
+                           "accept": accepts})
 
-    if post_body.strip():
-        reveals, text = _extract_reveals(post_body)
+    # Deferred partner/opponent prose leads the post-auction chunk (introduce
+    # the hand), followed by the authored [POST-AUCTION] body (the play plan).
+    deferred_text = "\n\n".join(p.strip() for p in deferred_parts if p.strip())
+    combined_post = "\n\n".join(s for s in (deferred_text, post_body.strip()) if s)
+    if combined_post.strip():
+        reveals, text = _extract_reveals(combined_post)
         if text or reveals:
             chunks.append({"bid_index": "post-auction", "reveals": reveals, "text": text})
 
@@ -878,8 +941,19 @@ def start_session(body: StartSessionBody):
         raise HTTPException(400, str(e))
     board_slices = _split_pbn_by_board(raw_text)
     if idx < len(board_slices):
+        # Auction positions belonging to the student (Student=S by convention),
+        # so ambiguous [BID Pass] chunks anchor to the student's own call.
+        student_letter = boards[idx].info.get("Student", "S")
+        student_seat = LETTER_SEAT.get(student_letter, Player.south)
+        seat = sess.dealer
+        student_indices = set()
+        for j in range(len(boards[idx].auction)):
+            if seat == student_seat:
+                student_indices.add(j)
+            seat = left_of(seat)
         sess.coaching = parse_coaching(
-            board_slices[idx], _auction_pbn_calls(boards[idx].auction)
+            board_slices[idx], _auction_pbn_calls(boards[idx].auction),
+            student_indices=student_indices,
         )
         all_tips = parse_tips(board_slices[idx])
         sess.tips = [t for t in all_tips if t["role"] == sess.role]
