@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Relationship to Practice-Bidding-Scenarios
+
+This is the **engine + UI** half of a two-repo system. The **content + pipeline** half is Practice-Bidding-Scenarios (`~/Practice-Bidding-Scenarios`, github.com/ADavidBailey/Practice-Bidding-Scenarios), which owns the scenarios, the dealer pipeline, the `coaching/*.pbn` tutorial prose, and the `btn/` menu layout.
+
+The dependency is one-directional: at runtime this app **reads** that repo's files via `BRIDGE_DATA_ROOT` (see [External data dependency](#external-data-dependency-important)) and never writes back. Rule of thumb: anything about *how the app behaves for every hand* (card play, scoring, UI, endpoints, animation, the coaching-marker parser) belongs here; anything about *a particular hand or what it teaches* (scenarios, deals, coaching prose, menu membership, pipeline) belongs in Practice-Bidding-Scenarios. The one shared seam is the coaching markers (`[show X]`, `[BID xxx]`, `\S\H\D\C`) — authored as prose over there, parsed here in `server.py`.
+
 ## Running the app
 
 ```
