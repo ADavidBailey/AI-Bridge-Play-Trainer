@@ -97,7 +97,18 @@ You emit the body of a single {...} block per board (no leading {, no trailing
   was led, the trick-1 decision (win/duck/which card), and what the lead reveals
   (4th-best → count via rule of 11; top-of-sequence → honors below it with the
   leader; singleton → a coming ruff; a lead into a tenace → a free trick). THEN
-  proceed to the deal's technique.
+  proceed to the deal's technique. HEDGE the interpretation — the card led is a
+  fact but its meaning is an inference: "the \D2 looks like a fourth-best,
+  suggesting ~4" / "looks like top of a sequence, so West probably holds the QJ"
+  / "looks like a singleton — watch for a ruff". Avoid flat "is fourth-best,
+  marking four" (defenders lead top-of-nothing, short suits, safe exits). The
+  leader's own pre-lead tip stays assertive (they know their hand).
+- Defensive signals (attitude/count/suit-preference): keep NUANCED and OPTIONAL —
+  the audience is beginner/casual and rarely signals reliably. Never state a
+  signal as fact (neither a defender obligation nor a declarer inference); hedge
+  ("if they're signaling, that high card hints at…, but don't count on it").
+  Prefer concrete card-reading (rule of 11, who showed out) over signal theory.
+  Declarer reads signals too, but shouldn't rely on them here.
 - Intro chunk starts with [show S] to reveal the student's hand. Subsequent
   [show ...] directives may reveal partner / opponents as the narrative
   requires (often [show NS] near the end of the auction).
