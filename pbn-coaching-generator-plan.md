@@ -65,9 +65,36 @@ You emit the body of a single {...} block per board (no leading {, no trailing
 
 - Emit one intro chunk and an anchored chunk for EACH non-pass call from the
   student's side (typically South). Skip anchoring on Pass.
+- VOICE: relaxed, warm, encouraging — a friendly teacher, not a textbook. The
+  audience skews beginner/senior. Put genuine PRAISE in the reflective
+  end-of-deal chunks ([show NS] reveal, [POST-AUCTION], [ROLE][STAGE post-play])
+  where it can't misfire ("Twelve tricks, +650 — lovely result; nicely judged").
+  Do NOT put praise ("Nice bid!") in a [BID] chunk — those fire after every
+  attempt, right or wrong; the trainer app's own ✓/✗ quiz messages handle
+  per-bid reactive praise. Stay warm AND accurate — never trade away a bridge
+  fact for tone.
+- When you reveal partner with [show NS], DESCRIBE THE COMBINED HANDS — the fit,
+  the combined strength, and the weakness — not partner's 13 cards. Once revealed,
+  partner's hand is on screen, so a card-by-card list ("Partner: \S… \H… \D… \C…")
+  is redundant. Name the trump/notrump fit and its combined length, where the
+  partnership's power lives (controls, a running suit, ruffing values), and the
+  soft spot (a leaky short suit, a missing stopper, thin trumps, a 4-3 fit, a
+  misfit); keep the contract/result takeaway. Name a specific honor only when it
+  makes a teaching point, never to enumerate the hand.
 - Intro chunk starts with [show S] to reveal the student's hand. Subsequent
   [show ...] directives may reveal partner / opponents as the narrative
   requires (often [show NS] near the end of the auction).
+- The intro chunk POSES the decision; it does NOT recite the hand or give the
+  answer. The student can see their own 13 cards, so do not list them
+  ("You hold \S… \H… \D… \C…") and do not name or hint the call. Use:
+  "You have <HCP> HCP and a <balanced | semi-balanced | unbalanced> hand
+  [, with <a significant feature or two>]. What do you open?" (or
+  "RHO opened 1X. What's your call?" in competitive scenarios). Vary the
+  feature wording per hand (e.g. "a strong rebiddable six-card spade suit",
+  "both majors", "no five-card major", "stoppers everywhere"). Shape buckets:
+  balanced = 4333/4432/5332; semi-balanced = 5422/6322; unbalanced = any
+  singleton/void, 7+ suit, or two 5+ suits. The [BID xxx] chunks come after
+  the call and DO explain the bid — that's where the teaching goes.
 - Refer to seats from the student's perspective: "you" (S), "partner" (N),
   "LHO" (W), "RHO" (E).
 - Each chunk: 2-4 short sentences, conversational, second-person.
@@ -138,9 +165,29 @@ Authoring rules:
 
 - Always emit one intro chunk and an anchored chunk for EACH non-pass call from
   the student's side (in this scenario, South). Skip anchoring on Pass.
+- VOICE: relaxed, warm, encouraging — a friendly teacher, not a textbook
+  (beginner/senior audience). Put genuine PRAISE in the reflective end-of-deal
+  chunks ([show NS], [POST-AUCTION], [ROLE][STAGE post-play]). Do NOT praise in
+  a [BID] chunk — it fires after wrong answers too; the app's ✓/✗ messages
+  handle per-bid praise. Warm AND accurate — never trade a bridge fact for tone.
+- When you reveal partner with [show NS], DESCRIBE THE COMBINED HANDS — the fit,
+  the combined strength, and the weakness — not partner's 13 cards. Once revealed,
+  partner's hand is on screen, so a card-by-card list is redundant. Name the
+  trump/notrump fit and combined length, where the power lives, and the soft spot;
+  keep the contract/result takeaway. Name a specific honor only to make a teaching
+  point, never to enumerate the hand.
 - The intro chunk starts with [show S] to reveal the student's hand only.
   Subsequent [show ...] directives may reveal partner / opponents as the
   pedagogical narrative requires (often [show NS] near the end of the auction).
+- The intro chunk POSES the decision; it does NOT recite the hand or give the
+  answer. The student can see their own 13 cards, so do not list them
+  ("You hold \S… \H… \D… \C…") and do not name or hint the call. Use:
+  "You have <HCP> HCP and a <balanced | semi-balanced | unbalanced> hand
+  [, with <a significant feature or two>]. What do you open?" (or
+  "RHO opened 1X. What's your call?" in competitive scenarios). Vary the
+  feature wording per hand. Shape buckets: balanced = 4333/4432/5332;
+  semi-balanced = 5422/6322; unbalanced = any singleton/void, 7+ suit, or two
+  5+ suits. The [BID xxx] chunks come after the call and DO explain the bid.
 - Refer to seats from the student's perspective: "you" (S), "partner" (N),
   "LHO" (W), "RHO" (E).
 - Keep each chunk to 2-4 short sentences. Conversational, second-person.

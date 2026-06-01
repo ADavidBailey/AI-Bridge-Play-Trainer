@@ -741,6 +741,24 @@ async function claimRest() {
 //   immediately and wait for the user to click Play. Same as before.
 // - Coached scenarios: walk through bids one at a time, pausing for the
 //   anchored coaching chunk (if any). The intro chunk fires first.
+// Varied, encouraging quiz feedback — senior-friendly: warm on a hit, gentle
+// on a miss, never harsh. Picked at random so it doesn't feel canned.
+const PRAISE_LINES = [
+  "Nice — that's the one.",
+  "Well done — that's spot on.",
+  "Lovely call.",
+  "Exactly right — nicely judged.",
+  "That's the winner.",
+  "Good eye — that's it.",
+  "Perfect.",
+];
+const RETRY_LINES = [
+  "Take another look at your hand and try again.",
+  "So close — have another look, you've got this.",
+  "Not this time — give your hand another glance and try again.",
+];
+const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
 async function animateAuction(state) {
   auctionAnimationToken += 1;
   const myToken = auctionAnimationToken;
@@ -847,8 +865,8 @@ async function animateAuction(state) {
           coachingTips.push({
             quizResult: "ok",
             text: multiOk
-              ? `✓ Good call — you bid ${formatBidForDisplay(pick)}. Either ${acceptPhrase} is fine here.`
-              : `✓ Correct — you bid ${formatBidForDisplay(pick)}. Nice.`,
+              ? `✓ ${pickOne(PRAISE_LINES)} You bid ${formatBidForDisplay(pick)} — either ${acceptPhrase} is fine here.`
+              : `✓ ${pickOne(PRAISE_LINES)} You bid ${formatBidForDisplay(pick)}.`,
           });
           revealed = true;
           break;
@@ -856,15 +874,15 @@ async function animateAuction(state) {
         if (attempt === 1) {
           coachingTips.push({
             quizResult: "miss",
-            text: `✗ Not quite — you bid ${formatBidForDisplay(pick)}. Take another look at your hand and try again.`,
+            text: `✗ You bid ${formatBidForDisplay(pick)}. ${pickOne(RETRY_LINES)}`,
           });
           if (lastState) render(lastState);
         } else {
           coachingTips.push({
             quizResult: "miss",
             text: multiOk
-              ? `✗ Still not it — you bid ${formatBidForDisplay(pick)}. Here either ${acceptPhrase} works.`
-              : `✗ Still not it — you bid ${formatBidForDisplay(pick)}. The textbook call here is ${formatBidForDisplay(call.call)}.`,
+              ? `✗ You bid ${formatBidForDisplay(pick)}. No worries — here either ${acceptPhrase} works.`
+              : `✗ You bid ${formatBidForDisplay(pick)}. No worries — the textbook call here is ${formatBidForDisplay(call.call)}.`,
           });
           revealed = true;
         }
