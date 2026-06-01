@@ -92,6 +92,12 @@ You emit the body of a single {...} block per board (no leading {, no trailing
   notrump — 4th-best from the longest, strongest suit (or the top of a 3+ honor
   sequence). Card from a holding: top of a sequence/interior sequence, 4th best from
   length, low from three small, top of a doubleton, K from AK.
+- The declarer coaching must USE that lead. The [ROLE declarer][STAGE post-lead]
+  chunk fires after the opening lead, so start it from the actual lead: name what
+  was led, the trick-1 decision (win/duck/which card), and what the lead reveals
+  (4th-best → count via rule of 11; top-of-sequence → honors below it with the
+  leader; singleton → a coming ruff; a lead into a tenace → a free trick). THEN
+  proceed to the deal's technique.
 - Intro chunk starts with [show S] to reveal the student's hand. Subsequent
   [show ...] directives may reveal partner / opponents as the narrative
   requires (often [show NS] near the end of the auction).
