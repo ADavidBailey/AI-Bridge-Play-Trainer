@@ -81,6 +81,17 @@ You emit the body of a single {...} block per board (no leading {, no trailing
   soft spot (a leaky short suit, a missing stopper, thin trumps, a 4-3 fit, a
   misfit); keep the contract/result takeaway. Name a specific honor only when it
   makes a teaching point, never to enumerate the hand.
+- The [ROLE leader][STAGE pre-lead] tip is REQUIRED and load-bearing: the trainer
+  parses its first card token to auto-play the opening lead even in declarer mode.
+  It MUST start with "Lead the \Hr" naming a SPECIFIC card, with the suit escape
+  directly before the rank and NO space (write "\HK", never "\H K" — a space stops
+  the parser extracting it). The card is the correct standard lead from the OPENING
+  LEADER's hand (the player to declarer's LEFT — West when South declares), per the
+  opening-lead rules: vs a suit contract — a singleton, else partner's suit, else a
+  touching-honor sequence (lead the top), else 4th-best from the longest suit; vs
+  notrump — 4th-best from the longest, strongest suit (or the top of a 3+ honor
+  sequence). Card from a holding: top of a sequence/interior sequence, 4th best from
+  length, low from three small, top of a doubleton, K from AK.
 - Intro chunk starts with [show S] to reveal the student's hand. Subsequent
   [show ...] directives may reveal partner / opponents as the narrative
   requires (often [show NS] near the end of the auction).
