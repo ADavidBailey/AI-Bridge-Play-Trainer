@@ -1156,7 +1156,10 @@ async function startPlay() {
         const postAuctionChunks = ((lastState && lastState.coaching) || [])
           .filter(c => c.bid_index === "post-auction");
         for (const ch of postAuctionChunks) {
-          if (ch.text) await presentChunk({ text: ch.text });
+          // Passive (no Continue gate): play has already begun (the lead is
+          // down), so a blocking Continue button would sit over the live
+          // table. Show the reflection text and let the user keep playing.
+          if (ch.text) await presentChunkPassive({ text: ch.text }, 0);
         }
         await presentTipsForStage(tips, "auction-end", role);
         await presentTipsForStage(tips, "post-lead", role);
