@@ -44,7 +44,7 @@ header h1 {
 
 #layout {
   display: grid;
-  grid-template-columns: 25% 1fr;
+  grid-template-columns: 34% 1fr;
   gap: 1.5rem;
   padding: 0 1rem 0 0.5rem;
 }
@@ -692,7 +692,7 @@ button.primary:hover { background: #16456a; }
   position: fixed;
   top: 90px;
   left: 0.5rem;
-  width: calc(25% - 1rem);
+  width: calc(34% - 1rem);
   max-height: calc(100vh - 110px);
   overflow-y: auto;
   background: white;
@@ -752,8 +752,8 @@ button.primary:hover { background: #16456a; }
   margin-bottom: 0.25rem;
 }
 .coach-tip-text {
-  font-size: 1rem;
-  line-height: 1.35;
+  font-size: 1.25rem;
+  line-height: 1.4;
   white-space: pre-wrap;
 }
 .coach-loading {
@@ -821,7 +821,7 @@ button.primary:hover { background: #16456a; }
   position: fixed;
   top: 90px;
   left: 0.5rem;
-  width: calc(25% - 1rem);
+  width: calc(34% - 1rem);
   max-height: calc(100vh - 110px);
   overflow-y: auto;
   background: #fff8df;
