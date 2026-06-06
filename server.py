@@ -31,17 +31,18 @@ DATA_ROOT = Path(os.environ.get("BRIDGE_DATA_ROOT", "/Users/adavidbailey/Practic
 REPO_ROOT = DATA_ROOT
 BBA_DIR = DATA_ROOT / "bba"
 COACHING_DIR = DATA_ROOT / "coaching"
+CURATED_DIR = DATA_ROOT / "coaching-curated"
 STATIC_DIR = APP_DIR / "static"
 
 
 def _scenario_pbn_path(scenario: str) -> Path | None:
-    """Return the coaching/ file if it exists, else fall back to bba/."""
-    coached = COACHING_DIR / f"{scenario}.pbn"
-    if coached.exists():
-        return coached
-    raw = BBA_DIR / f"{scenario}.pbn"
-    if raw.exists():
-        return raw
+    """Resolve a scenario to its PBN, preferring the pipeline-generated
+    curated lesson (coaching-curated/), then the hand-authored coaching/,
+    then the raw bba/ pool."""
+    for d in (CURATED_DIR, COACHING_DIR, BBA_DIR):
+        p = d / f"{scenario}.pbn"
+        if p.exists():
+            return p
     return None
 
 SEAT_LETTER = {Player.north: "N", Player.east: "E", Player.south: "S", Player.west: "W"}
@@ -885,8 +886,10 @@ SESSIONS: dict[str, Session] = {}
 
 @app.get("/api/scenarios")
 def list_scenarios():
-    # Only scenarios that have an embedded-coaching file are user-pickable.
-    files = sorted(p.stem for p in COACHING_DIR.glob("*.pbn") if not p.stem.startswith("-"))
+    # Only scenarios that have an embedded-coaching file are user-pickable
+    # (curated lessons and hand-authored coaching both count).
+    files = sorted({p.stem for d in (CURATED_DIR, COACHING_DIR)
+                    for p in d.glob("*.pbn") if not p.stem.startswith("-")})
     return {"scenarios": files}
 
 
@@ -935,8 +938,10 @@ def parse_layout(text: str):
 def get_menu():
     layout_path = next((p for p in LAYOUT_PATHS if p.exists()), None)
     # Only scenarios with embedded coaching are user-pickable; sections that
-    # have zero coached scenarios drop out entirely.
-    available = {p.stem for p in COACHING_DIR.glob("*.pbn") if not p.stem.startswith("-")}
+    # have zero coached scenarios drop out entirely. Curated lessons
+    # (coaching-curated/) and hand-authored coaching/ both qualify.
+    available = {p.stem for d in (CURATED_DIR, COACHING_DIR)
+                 for p in d.glob("*.pbn") if not p.stem.startswith("-")}
     if layout_path is None:
         # Fallback: flat alphabetical
         return {"sections": [{"title": "Scenarios", "scenarios": sorted(available)}]}
