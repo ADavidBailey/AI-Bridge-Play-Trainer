@@ -992,7 +992,14 @@ def start_session(body: StartSessionBody):
     # decision from either seat across boards.
     student_letter = boards[idx].info.get("Student", "S")
     student_seat = LETTER_SEAT.get(student_letter, Player.south)
-    if body.randomly_rotate:
+    # Randomly Rotate only applies to ROTATION-READY coaching — i.e. prose that
+    # uses the @-pronoun tokens so it reads correctly from either seat. On
+    # hand-authored coaching (no tokens) the prose hardcodes "you" = the
+    # authored seat, so reseating the student would garble it; leave such
+    # scenarios on their authored seat.
+    rotation_ready = idx < len(board_slices) and ('@S' in board_slices[idx]
+                        or '@s' in board_slices[idx] or '@v(' in board_slices[idx])
+    if body.randomly_rotate and rotation_ready:
         calls = _auction_pbn_calls(boards[idx].auction)
         acted = set()
         for j, call in enumerate(calls):
