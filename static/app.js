@@ -1448,6 +1448,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("role-select").addEventListener("change", () => {
     if (currentScenario) nextDeal();
   });
+  // Randomly Rotate is a bidding-practice mode: the student is seated by the
+  // rotation, so the "Play as" role can't also be chosen. Grey it out while
+  // rotation is on, and restart the current deal so the change takes effect.
+  const rotateBox = document.getElementById("randomly-rotate");
+  const roleSelect = document.getElementById("role-select");
+  const syncRoleEnabled = () => { roleSelect.disabled = rotateBox.checked; };
+  rotateBox.addEventListener("change", () => {
+    syncRoleEnabled();
+    if (currentScenario) nextDeal();
+  });
+  syncRoleEnabled();
 
   await loadMenu();
 });
