@@ -11,6 +11,7 @@ Declarer mode only for the MVP. Defender mode + Claude grading come next.
 
 import io
 import re
+import random
 import secrets
 from pathlib import Path
 
@@ -60,6 +61,42 @@ def left_of(p):
 
 def partner_of(p):
     return Player((int(p) + 2) % 4)
+
+
+def seat_at_auction_index(dealer: Player, idx: int) -> Player:
+    """The seat that made the call at position idx (dealer calls at idx 0,
+    then clockwise/left)."""
+    s = dealer
+    for _ in range(idx):
+        s = left_of(s)
+    return s
+
+
+# Pronoun tokens for rotation-aware coaching. A [BID] chunk is authored in the
+# second person addressing ITS OWN actor; when the student is sitting in that
+# seat the tokens render second person ("you"), otherwise third person ("your
+# partner"). This lets one coaching file read correctly from either seat under
+# Randomly Rotate. Intro / [show NS] reflection chunks should be authored
+# seat-neutral (no tokens) and pass through unchanged.
+#   @S / @s        subject  → You / Your partner   (you / your partner)
+#   @Your / @your  possessive → Your / Their       (your / their)
+#   @v(base|third) verb agreement → base (student) / third (partner)
+#   (parentheses, NOT braces — a '}' inside the token would collide with the
+#   coaching block's own '}' delimiter and truncate it.)
+_PRONOUN_VERB_RE = re.compile(r'@v\(([^|)]*)\|([^)]*)\)')
+
+def fill_pronouns(text: str, is_student: bool) -> str:
+    if not text or '@' not in text:
+        return text
+    text = _PRONOUN_VERB_RE.sub((lambda m: m.group(1)) if is_student
+                                else (lambda m: m.group(2)), text)
+    pairs = (([('@Your', 'Your'), ('@your', 'your'), ('@S', 'You'), ('@s', 'you')])
+             if is_student else
+             ([('@Your', 'Their'), ('@your', 'their'),
+               ('@S', 'Your partner'), ('@s', 'your partner')]))
+    for tok, rep in pairs:
+        text = text.replace(tok, rep)
+    return text
 
 
 def parse_contract(s):
@@ -916,6 +953,10 @@ class StartSessionBody(BaseModel):
     scenario: str
     board_index: int = 0
     role: str = "declarer"
+    # When true, the student is seated randomly among the bidding partnership's
+    # seats (each board), so a bidding lesson is faced from both opener and
+    # responder. Coaching pronoun tokens (@S/@s/@your/@v{}) render per seat.
+    randomly_rotate: bool = False
 
 
 @app.post("/api/session")
@@ -940,11 +981,24 @@ def start_session(body: StartSessionBody):
     except ValueError as e:
         raise HTTPException(400, str(e))
     board_slices = _split_pbn_by_board(raw_text)
+    # Decide which seat the student occupies. Default: the PBN's Student tag
+    # (convention S). With randomly_rotate, pick randomly among the bidding
+    # partnership's seats that made a non-pass call, so the student faces the
+    # decision from either seat across boards.
+    student_letter = boards[idx].info.get("Student", "S")
+    student_seat = LETTER_SEAT.get(student_letter, Player.south)
+    if body.randomly_rotate:
+        calls = _auction_pbn_calls(boards[idx].auction)
+        acted = set()
+        for j, call in enumerate(calls):
+            s = seat_at_auction_index(sess.dealer, j)
+            if call.upper() != "PASS" and s in (student_seat, partner_of(student_seat)):
+                acted.add(s)
+        choices = sorted(acted, key=int) or [student_seat]
+        student_seat = random.choice(choices)
     if idx < len(board_slices):
-        # Auction positions belonging to the student (Student=S by convention),
-        # so ambiguous [BID Pass] chunks anchor to the student's own call.
-        student_letter = boards[idx].info.get("Student", "S")
-        student_seat = LETTER_SEAT.get(student_letter, Player.south)
+        # Auction positions belonging to the student, so ambiguous [BID Pass]
+        # chunks anchor to the student's own call.
         seat = sess.dealer
         student_indices = set()
         for j in range(len(boards[idx].auction)):
@@ -972,9 +1026,18 @@ def start_session(body: StartSessionBody):
     # on the server and still flow.
     if sess.coaching is not None:
         if sess.role == "declarer":
-            student_letter = boards[idx].info.get("Student", "S")
-            student = LETTER_SEAT.get(student_letter, Player.south)
-            sess.set_student_seat(student)
+            sess.set_student_seat(student_seat)
+            # Render pronoun tokens per chunk: a [BID] chunk authored in the
+            # second person reads "you" when the student made that call, else
+            # "your partner". Intro/reflection chunks are seat-neutral (no
+            # tokens) and pass through unchanged.
+            for ch in sess.coaching:
+                bi = ch.get("bid_index")
+                is_student = (isinstance(bi, int)
+                              and seat_at_auction_index(sess.dealer, bi) == student_seat)
+                if not isinstance(bi, int):
+                    is_student = True  # neutral chunks: no-op fill
+                ch["text"] = fill_pronouns(ch.get("text", ""), is_student)
         else:
             sess.coaching = None
     # NOTE: deliberately NOT calling sess.auto_play_until_user() here. The

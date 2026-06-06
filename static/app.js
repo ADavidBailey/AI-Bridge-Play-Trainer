@@ -618,10 +618,11 @@ async function startSession() {
   if (!currentScenario) return;
   const boardIndex = parseInt(document.getElementById("board-index").value, 10) || 0;
   const role = document.getElementById("role-select").value || "declarer";
+  const randomlyRotate = document.getElementById("randomly-rotate").checked;
   try {
     const data = await api("/api/session", {
       method: "POST",
-      body: JSON.stringify({ scenario: currentScenario, board_index: boardIndex, role }),
+      body: JSON.stringify({ scenario: currentScenario, board_index: boardIndex, role, randomly_rotate: randomlyRotate }),
     });
     sessionId = data.session_id;
     closeScenariosView();
