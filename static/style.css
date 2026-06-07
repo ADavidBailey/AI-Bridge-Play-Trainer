@@ -16,7 +16,10 @@
 
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  font-size: 15px;
+  /* Whole UI scales from this one value (everything else is rem/em). 13.5px ≈
+     90% of the old 15px, so the page fits at default zoom instead of needing
+     one Cmd-− to fit; still senior-friendly large. */
+  font-size: 13.5px;
   background: var(--bg);
   color: var(--ink);
   margin: 0;
@@ -33,6 +36,14 @@ header h1 {
   margin: 0;
   font-size: 1.6rem;
   font-weight: 600;
+}
+
+/* Active scenario name, to the right of the title, slightly smaller. */
+.title-scenario {
+  font-size: 0.62em;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 #status-line {

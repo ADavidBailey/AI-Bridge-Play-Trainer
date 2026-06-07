@@ -508,8 +508,15 @@ function render(state) {
   // Same spoiler rule as renderContractDisplay — drop the contract from the
   // status line until the auction is fully revealed.
   const statusContract = auctionAnimating ? "?" : state.contract_str;
+  // Scenario name (button-text, not the underscored filename) sits by the title.
+  // Guarded: a stale-cached index.html without this span mustn't break render.
+  const titleScenario = document.getElementById("title-scenario");
+  if (titleScenario) {
+    titleScenario.textContent =
+      state.scenario ? " — " + state.scenario.replaceAll("_", " ") : "";
+  }
   document.getElementById("status-line").textContent =
-    `${state.scenario} · Deal ${state.board_num} · ${statusContract}`;
+    `Deal ${state.board_num} · ${statusContract}`;
   document.getElementById("game").hidden = false;
   document.getElementById("claim-btn").disabled = state.complete;
   document.getElementById("undo-btn").disabled = !state.can_undo;
