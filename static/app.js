@@ -1304,9 +1304,14 @@ async function undoLast() {
 // issue (labelled "user-feedback") for David to triage.
 function openReportModal() {
   if (!sessionId) return;
+  const sendBtn = document.getElementById("report-send");
   document.getElementById("report-text").value = "";
   document.getElementById("report-status").textContent = "";
-  document.getElementById("report-send").disabled = false;
+  // Reset the dialog to its pre-send state (in case it was left showing "Close").
+  sendBtn.disabled = false;
+  sendBtn.textContent = "Send";
+  delete sendBtn.dataset.sent;
+  document.getElementById("report-cancel").hidden = false;
   document.getElementById("report-modal").hidden = false;
   document.getElementById("report-text").focus();
 }
@@ -1317,9 +1322,12 @@ function closeReportModal() {
 
 async function sendReport() {
   if (!sessionId) return;
+  const sendBtn = document.getElementById("report-send");
+  // Once a report has been sent the button reads "Close" and just dismisses the
+  // dialog — no leftover Cancel/Send to puzzle over.
+  if (sendBtn.dataset.sent) { closeReportModal(); return; }
   const textEl = document.getElementById("report-text");
   const statusEl = document.getElementById("report-status");
-  const sendBtn = document.getElementById("report-send");
   const note = (textEl.value || "").trim();
   if (!note) { statusEl.textContent = "Please describe what looks wrong."; return; }
   sendBtn.disabled = true;
@@ -1333,6 +1341,10 @@ async function sendReport() {
       ? `Thanks — reported. <a href="${data.issue_url}" target="_blank" rel="noopener">View the issue</a>.`
       : "Thanks — your report was sent.";
     textEl.value = "";
+    // Turn the dialog into a simple confirmation: Send → Close, drop Cancel.
+    sendBtn.textContent = "Close";
+    sendBtn.dataset.sent = "1";
+    document.getElementById("report-cancel").hidden = true;
   } catch (e) {
     // api() throws "STATUS: <body>"; pull the plain {detail} message out of
     // the JSON body so the user sees English, not a raw payload.
