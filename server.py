@@ -31,6 +31,7 @@ from endplay.dds import solve_board, calc_dd_table
 from endplay.parsers import pbn
 
 import os
+import time
 import httpx
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1166,6 +1167,39 @@ def end_session(sid: str):
 
 # ---------- user feedback → GitHub issue ----------
 
+# Abuse limits — a feedback note is untrusted input from anyone who can reach
+# the app. Cap its length, neutralize @mentions / #refs (so a note can't ping
+# GitHub users or cross-link issues), and rate-limit filing across the server.
+MAX_NOTE_LEN = 2000
+REPORT_RATE_MAX = 20        # at most this many issues ...
+REPORT_RATE_WINDOW = 3600   # ... filed per this many seconds (rolling window)
+_REPORT_TIMES: list[float] = []
+_SIGIL_RE = re.compile(r"([@#])(?=\w)")
+
+
+def _sanitize_note(note: str) -> str:
+    note = (note or "").strip()
+    if len(note) > MAX_NOTE_LEN:
+        note = note[:MAX_NOTE_LEN].rstrip() + " … (truncated)"
+    # A zero-width space after @ or # stops GitHub auto-linking the token (no
+    # notification, no cross-ref) while staying invisible in the rendered text.
+    note = _SIGIL_RE.sub(lambda m: m.group(1) + "\u200b", note)
+    return note or "_(no note provided)_"
+
+
+def _rate_limited() -> bool:
+    """True once REPORT_RATE_MAX issues have been filed within the rolling
+    window. Records the timestamp only when it allows the call."""
+    now = time.monotonic()
+    cutoff = now - REPORT_RATE_WINDOW
+    while _REPORT_TIMES and _REPORT_TIMES[0] < cutoff:
+        _REPORT_TIMES.pop(0)
+    if len(_REPORT_TIMES) >= REPORT_RATE_MAX:
+        return True
+    _REPORT_TIMES.append(now)
+    return False
+
+
 class ReportBody(BaseModel):
     note: str = ""
 
@@ -1191,7 +1225,7 @@ def _build_issue(sess, note: str):
         phase = "auction / pre-play"
     else:
         phase = f"playing — trick {len(sess.trick_history) + 1}"
-    note_clean = (note or "").strip() or "_(no note provided)_"
+    note_clean = _sanitize_note(note)
     title = f"Feedback: {scenario} · board {board_num} · {role}"
     body = (
         f"**User says:** {note_clean}\n\n"
@@ -1214,6 +1248,8 @@ async def report_feedback(sid: str, body: ReportBody):
     if not token:
         # Feature isn't wired up yet — say so plainly rather than a 500.
         raise HTTPException(503, "Feedback isn't configured yet (GITHUB_TOKEN is unset).")
+    if _rate_limited():
+        raise HTTPException(429, "Thanks — lots of reports have just come in. Please try again in a little while.")
     title, issue_body = _build_issue(sess, body.note)
     headers = {
         "Authorization": f"Bearer {token}",
