@@ -515,6 +515,7 @@ function render(state) {
   document.getElementById("undo-btn").disabled = !state.can_undo;
   document.getElementById("hint-btn").disabled =
     state.complete || !(state.trick_history && state.trick_history.length > 0);
+  document.getElementById("report-btn").disabled = false;
   renderAuction(state);
   renderContractDisplay(state);
   renderTable(state);
@@ -1296,6 +1297,54 @@ async function undoLast() {
   }
 }
 
+// ---------- report a problem ----------
+
+// Opens the feedback modal. The note is all the user supplies; the server
+// reads scenario/board/deal/auction from the live session and files a GitHub
+// issue (labelled "user-feedback") for David to triage.
+function openReportModal() {
+  if (!sessionId) return;
+  document.getElementById("report-text").value = "";
+  document.getElementById("report-status").textContent = "";
+  document.getElementById("report-send").disabled = false;
+  document.getElementById("report-modal").hidden = false;
+  document.getElementById("report-text").focus();
+}
+
+function closeReportModal() {
+  document.getElementById("report-modal").hidden = true;
+}
+
+async function sendReport() {
+  if (!sessionId) return;
+  const textEl = document.getElementById("report-text");
+  const statusEl = document.getElementById("report-status");
+  const sendBtn = document.getElementById("report-send");
+  const note = (textEl.value || "").trim();
+  if (!note) { statusEl.textContent = "Please describe what looks wrong."; return; }
+  sendBtn.disabled = true;
+  statusEl.textContent = "Sending…";
+  try {
+    const data = await api(`/api/session/${sessionId}/report`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    });
+    statusEl.innerHTML = data.issue_url
+      ? `Thanks — reported. <a href="${data.issue_url}" target="_blank" rel="noopener">View the issue</a>.`
+      : "Thanks — your report was sent.";
+    textEl.value = "";
+  } catch (e) {
+    // api() throws "STATUS: <body>"; pull the plain {detail} message out of
+    // the JSON body so the user sees English, not a raw payload.
+    let msg = e.message;
+    const m = msg.match(/^\d+:\s*(\{[\s\S]*\})$/);
+    if (m) { try { msg = JSON.parse(m[1]).detail || msg; } catch (_) {} }
+    statusEl.textContent = "Couldn't send — " + msg;
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
 // ---------- session totals ----------
 
 let sessionImps = 0;                 // Running IMPs vs DD since this tab was opened
@@ -1430,6 +1479,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);
   document.getElementById("hint-btn").addEventListener("click", showHint);
+  document.getElementById("report-btn").addEventListener("click", openReportModal);
+  document.getElementById("report-cancel").addEventListener("click", closeReportModal);
+  document.getElementById("report-send").addEventListener("click", sendReport);
+  document.getElementById("report-modal").addEventListener("click", (ev) => {
+    if (ev.target.id === "report-modal") closeReportModal();  // click the backdrop to close
+  });
   document.getElementById("inference-title").addEventListener("click", onInferenceTitleClick);
   const reviewBtn = document.getElementById("review-btn");
   // Pointer capture keeps pointerup firing on the button even if the cursor

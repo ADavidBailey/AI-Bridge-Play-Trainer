@@ -6,6 +6,12 @@ Start with:
 
 Then open http://localhost:8765/ in your browser.
 
+Optional: set GITHUB_TOKEN (a fine-grained PAT scoped to this repo with
+Issues: read/write) to enable the in-app "Report a problem" button, which
+files user feedback as GitHub issues. Without it, the button reports that
+feedback isn't configured and everything else works normally. See
+feedback-feature-plan.md.
+
 Declarer mode only for the MVP. Defender mode + Claude grading come next.
 """
 
@@ -25,6 +31,7 @@ from endplay.dds import solve_board, calc_dd_table
 from endplay.parsers import pbn
 
 import os
+import httpx
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("BRIDGE_DATA_ROOT", "/Users/adavidbailey/Practice-Bidding-Scenarios"))
@@ -33,6 +40,7 @@ BBA_DIR = DATA_ROOT / "bba"
 COACHING_DIR = DATA_ROOT / "coaching"
 CURATED_DIR = DATA_ROOT / "coaching-curated"
 STATIC_DIR = APP_DIR / "static"
+GITHUB_REPO = "ADavidBailey/AI-Bridge-Play-Trainer"  # in-app feedback files issues here
 
 
 def _scenario_pbn_path(scenario: str) -> Path | None:
@@ -1154,6 +1162,83 @@ def claim(sid: str, body: ClaimBody):
 def end_session(sid: str):
     SESSIONS.pop(sid, None)
     return {"ok": True}
+
+
+# ---------- user feedback → GitHub issue ----------
+
+class ReportBody(BaseModel):
+    note: str = ""
+
+
+def _deal_pbn(sess) -> str:
+    """The board's four hands in the author's real-compass frame, so the issue
+    points at the exact deal in coaching-curated/<scenario>.pbn."""
+    order = (Player.north, Player.east, Player.south, Player.west)
+    return " ".join(f"{SEAT_LETTER[p]}:{sess.initial_hands[p]}" for p in order)
+
+
+def _build_issue(sess, note: str):
+    """Compose a GitHub issue (title, body) from the live session. Real-compass
+    frame throughout — frame-stable and matches the source PBN."""
+    scenario = sess.board.info.get("Event", "?")
+    board_num = sess.board.board_num
+    role = sess.role
+    contract = f"{sess.level}{DENOM_SYM[sess.trump]} by {SEAT_LETTER[sess.declarer]}"
+    auction = " ".join(c["call"] for c in auction_dict(sess.board.auction, sess.dealer)) or "(none)"
+    if sess.complete:
+        phase = "deal complete"
+    elif sess.cards_played_count == 0:
+        phase = "auction / pre-play"
+    else:
+        phase = f"playing — trick {len(sess.trick_history) + 1}"
+    note_clean = (note or "").strip() or "_(no note provided)_"
+    title = f"Feedback: {scenario} · board {board_num} · {role}"
+    body = (
+        f"**User says:** {note_clean}\n\n"
+        f"---\n"
+        f"*auto-captured:*\n"
+        f"- Scenario: **{scenario}** · Board: **{board_num}** · Role: **{role}**\n"
+        f"- Contract: {contract} · {phase}\n"
+        f"- Auction: {auction}\n"
+        f"- Deal (PBN): `{_deal_pbn(sess)}`\n"
+    )
+    return title, body
+
+
+@app.post("/api/session/{sid}/report")
+async def report_feedback(sid: str, body: ReportBody):
+    sess = SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        # Feature isn't wired up yet — say so plainly rather than a 500.
+        raise HTTPException(503, "Feedback isn't configured yet (GITHUB_TOKEN is unset).")
+    title, issue_body = _build_issue(sess, body.note)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Best-effort: make sure the label exists (422 if it already does — fine).
+            await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/labels",
+                json={"name": "user-feedback", "color": "0e8a16",
+                      "description": "Reported from inside the Play Trainer"},
+                headers=headers,
+            )
+            resp = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/issues",
+                json={"title": title, "body": issue_body, "labels": ["user-feedback"]},
+                headers=headers,
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Couldn't reach GitHub: {e}")
+    if resp.status_code >= 300:
+        raise HTTPException(502, f"GitHub rejected the report ({resp.status_code}): {resp.text[:300]}")
+    return {"ok": True, "issue_url": resp.json().get("html_url")}
 
 
 # ---------- static files ----------

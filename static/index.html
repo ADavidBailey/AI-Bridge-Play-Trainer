@@ -64,6 +64,7 @@
             <div id="tricks-strip"></div>
             <button id="hint-btn" disabled title="Show card-counting facts from the trick history">Hint</button>
             <button id="review-btn" disabled title="Hold down to see the auction">Review</button>
+            <button id="report-btn" disabled title="Report a problem with this deal or its coaching">🚩 Report</button>
           </div>
           <div id="slot-bottom" class="seat"></div>
         </div>
@@ -88,6 +89,21 @@
       </div>
     </section>
   </main>
+</div>
+
+<div id="report-modal" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Report a problem</h2>
+    <p class="muted">Tell us what looks wrong on this deal — your note is sent
+      along with the scenario, board, and deal so it can be tracked down.</p>
+    <textarea id="report-text" rows="5" placeholder="What looks wrong here?"
+      style="width:100%;box-sizing:border-box"></textarea>
+    <div id="report-status" class="muted"></div>
+    <div class="modal-actions">
+      <button id="report-cancel">Cancel</button>
+      <button id="report-send" class="primary">Send</button>
+    </div>
+  </div>
 </div>
 
 <script src="/static/app.js"></script>
