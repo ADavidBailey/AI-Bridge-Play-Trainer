@@ -1204,6 +1204,16 @@ async function replayDeal() {
   }
 }
 
+// High-card points in a hand object {spades:"AKQ", hearts:"..", ...}.
+function handHcp(hand) {
+  if (!hand) return 0;
+  const V = { A: 4, K: 3, Q: 2, J: 1 };
+  let n = 0;
+  for (const k of ["spades", "hearts", "diamonds", "clubs"])
+    for (const r of (hand[k] || "")) n += V[r] || 0;
+  return n;
+}
+
 // On-demand Hint: scan the trick history and surface the bridge bookkeeping
 // the user can deduce from what's been played — cards still out per suit,
 // who has shown out of which suit, and the location of high cards already
@@ -1281,7 +1291,66 @@ function computeHintLines(state) {
     lines.push(`${labeled} void in ${suits}.`);
   }
 
-  return lines;
+  // ---- Reading the hidden hands: HCP complement + bidding + rule of 11 ----
+  // Declarer-centric (helping declarer count the defenders). Uses ONLY public
+  // info — the auction, dummy, declarer's own hand, and every card played —
+  // never the defenders' unseen cards. These go first (the headline reads).
+  const readingLines = [];
+  if (state.role === "declarer") {
+    const HV = { A: 4, K: 3, Q: 2, J: 1 };
+    const decl = (state.hands || {}).S, dummy = (state.hands || {}).N;
+    const playedW = playedBySeat.W || [], playedE = playedBySeat.E || [];
+    const ptsPlayed = cards => cards.reduce((n, c) => n + (HV[c.slice(1)] || 0), 0);
+
+    // 1. HCP complement — exact once dummy is tabled.
+    if (decl && dummy) {
+      const ns = handHcp(decl) + handHcp(dummy);
+      const def = 40 - ns;
+      const seen = ptsPlayed(playedW) + ptsPlayed(playedE);
+      let l = `You and dummy hold ${ns} HCP, so the defence has ${def} between them`;
+      l += seen > 0 ? `; ${seen} has appeared, about ${Math.max(0, def - seen)} still hidden.` : ".";
+      readingLines.push(l);
+      for (const [seat, played] of [["W", playedW], ["E", playedE]]) {
+        const honors = played.filter(c => "AKQJ".includes(c.slice(1)));
+        if (honors.length) readingLines.push(`${userRelativeLabel(seat, state)} has shown ${honors.join(", ")} (${ptsPlayed(played)}) so far.`);
+      }
+    }
+
+    // 2. What the auction showed about each defender (LHO=W, RHO=E in display).
+    for (const seat of ["W", "E"]) {
+      const who = userRelativeLabel(seat, state);
+      const calls = (state.auction || []).filter(c => c.seat === seat).map(c => c.call);
+      const acts = calls.filter(c => c && c !== "Pass" && c !== "XX");
+      if (calls.length && acts.length === 0) {
+        readingLines.push(`${who} never bid — no opening or overcall values (roughly under 12, no biddable long suit).`);
+      }
+      for (const call of acts) {
+        if (call === "X") readingLines.push(`${who} doubled — opening values, usually short in the doubled suit (takeout) or extra strength.`);
+        else if (/NT$/.test(call)) readingLines.push(`${who} bid ${call} — a balanced hand in that range.`);
+        else if (/^\d/.test(call)) {
+          const lvl = parseInt(call[0], 10);
+          readingLines.push(`${who} bid ${call} — ${lvl >= 3 ? "6+" : "5+"} ${call.slice(1)}, ${lvl >= 3 ? "a weak long suit" : "about 8-16 HCP"}.`);
+        }
+      }
+    }
+
+    // 3. Rule of eleven on the opening lead, when it's a low-ish spot
+    //    (plausibly 4th-best — sequence/honor leads don't qualify).
+    const PIP = { A:14,K:13,Q:12,J:11,T:10,"9":9,"8":8,"7":7,"6":6,"5":5,"4":4,"3":3,"2":2 };
+    const first = (state.trick_history || [])[0];
+    const lead = first ? first.plays[0] : (state.current_trick || [])[0];
+    if (lead && lead.seat === "W" && decl && dummy) {
+      const sym = lead.card[0], rank = lead.card.slice(1), pip = PIP[rank];
+      const KEY = { "♠":"spades", "♥":"hearts", "♦":"diamonds", "♣":"clubs" };
+      if (pip && pip <= 9 && KEY[sym]) {
+        const higher = h => [...((h || {})[KEY[sym]] || "")].filter(r => (PIP[r] || 0) > pip).length;
+        const outside = 11 - pip, seenNS = higher(decl) + higher(dummy);
+        readingLines.push(`If ${userRelativeLabel("W", state)}'s opening ${sym}${rank} was 4th-best, the rule of eleven says ${outside} cards above it are in the other three hands; you and dummy hold ${seenNS}, so ${userRelativeLabel("E", state)} has ${Math.max(0, outside - seenNS)}.`);
+      }
+    }
+  }
+
+  return readingLines.concat(lines);
 }
 
 function userRelativeLabel(seat, state) {
