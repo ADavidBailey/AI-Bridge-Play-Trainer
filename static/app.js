@@ -1413,13 +1413,11 @@ async function sendReport() {
   sendBtn.disabled = true;
   statusEl.textContent = "Sending…";
   try {
-    const data = await api(`/api/session/${sessionId}/report`, {
+    await api(`/api/session/${sessionId}/report`, {
       method: "POST",
       body: JSON.stringify({ note }),
     });
-    statusEl.innerHTML = data.issue_url
-      ? `Thanks — reported. <a href="${data.issue_url}" target="_blank" rel="noopener">View the issue</a>.`
-      : "Thanks — your report was sent.";
+    statusEl.textContent = "Thanks — your report was sent.";
     textEl.value = "";
     // Turn the dialog into a simple confirmation: Send → Close, drop Cancel.
     sendBtn.textContent = "Close";
