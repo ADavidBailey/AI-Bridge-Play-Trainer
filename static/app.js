@@ -370,7 +370,7 @@ function renderTable(state) {
 
   const center = document.getElementById("center");
   center.innerHTML = "";
-  center.classList.remove("reviewing");
+  center.classList.remove("reviewing", "result-mode");
   center.onclick = toggleLastTrick;
 
   const seatToPosition = {
@@ -448,6 +448,7 @@ function renderTable(state) {
   }
 
   if (state.complete) {
+    center.classList.add("result-mode");  // center the result text vertically (#19)
     const r = state.result;
     const declSym = state.strain_symbol;
     const declKlass = suitClassFromSymbol(declSym);
@@ -515,8 +516,11 @@ function render(state) {
     titleScenario.textContent =
       state.scenario ? " — " + state.scenario.replaceAll("_", " ") : "";
   }
-  document.getElementById("status-line").textContent =
-    `Deal ${state.board_num} · ${statusContract}`;
+  // Deal/contract sits on the top line, right of the scenario name (#20);
+  // the old second status line is left empty (collapsed via #status-line:empty).
+  const titleDeal = document.getElementById("title-deal");
+  if (titleDeal) titleDeal.textContent = `Deal ${state.board_num} · ${statusContract}`;
+  document.getElementById("status-line").textContent = "";
   document.getElementById("game").hidden = false;
   document.getElementById("claim-btn").disabled = state.complete;
   document.getElementById("undo-btn").disabled = !state.can_undo;
