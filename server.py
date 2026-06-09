@@ -35,6 +35,18 @@ import time
 import httpx
 
 APP_DIR = Path(__file__).resolve().parent
+
+# Load a gitignored .env (e.g. GITHUB_TOKEN for the feedback button) without a
+# hard dependency on python-dotenv. Real environment variables win over .env.
+_ENV_FILE = APP_DIR / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
 DATA_ROOT = Path(os.environ.get("BRIDGE_DATA_ROOT", "/Users/adavidbailey/Practice-Bidding-Scenarios"))
 REPO_ROOT = DATA_ROOT
 BBA_DIR = DATA_ROOT / "bba"
