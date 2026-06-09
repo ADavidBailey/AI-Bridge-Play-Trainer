@@ -801,6 +801,10 @@ button.primary:hover { background: #16456a; }
   background: #fbeded;
   border-color: #d8a9a9;
 }
+.coach-tip-newest {
+  border-left: 4px solid #c08a2d;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
 
 /* Bidding quiz box, rendered inside the coaching panel during the
    auction-replay animation. */

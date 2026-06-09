@@ -1260,9 +1260,9 @@ function showHint() {
   if (!lastState || !lastState.trick_history) return;
   const lines = computeHintLines(lastState);
   if (lines.length === 0) {
-    coachingTips.push({ text: "Hint — nothing inferable yet from the trick history." });
+    coachingTips.push({ text: "Hint — nothing inferable yet from the trick history.", kind: "hint" });
   } else {
-    coachingTips.push({ text: "Hint — " + lines.join(" ") });
+    coachingTips.push({ text: "Hint — " + lines.join(" "), kind: "hint" });
   }
   renderCoachingPanel();
 }
@@ -1598,10 +1598,19 @@ function renderCoachingPanel() {
   panel.hidden = false;
   body.innerHTML = "";
   body.classList.add("coaching-tips-list");
-  for (const tip of coachingTips) {
+  // Hints are on-demand bookkeeping the user re-pulls during play, so show them
+  // newest-first at the TOP of the panel (freshest highlighted) so a change is
+  // obvious; the tutorial coaching narrative stays chronological below.
+  const hintTips = coachingTips.filter(t => t.kind === "hint");
+  const otherTips = coachingTips.filter(t => t.kind !== "hint");
+  const newestHint = hintTips[hintTips.length - 1];
+  const ordered = [...hintTips.slice().reverse(), ...otherTips];
+  for (const tip of ordered) {
+    const isNewestHint = tip === newestHint;
     const cls = "coach-tip-card" +
       (tip.quizResult === "ok" ? " coach-tip-ok" :
-       tip.quizResult === "miss" ? " coach-tip-miss" : "");
+       tip.quizResult === "miss" ? " coach-tip-miss" : "") +
+      (isNewestHint ? " coach-tip-newest" : "");
     const card = el("div", { class: cls });
     const textDiv = el("div", { class: "coach-tip-text" });
     appendTextWithColoredSuits(textDiv, tip.text);
