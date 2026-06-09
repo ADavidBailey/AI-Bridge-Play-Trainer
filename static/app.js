@@ -531,10 +531,44 @@ function render(state) {
   renderContractDisplay(state);
   renderTable(state);
   renderTricksStrip(state);
+  renderOpponentTable(state);
   renderTrickSummary(state);
   renderResult(state);
   renderCoachingPanel();
   if (state.complete) maybeFirePostPlayTip(state);
+}
+
+// Live "known-only" opponent count table. Renders strictly from state.
+// opponent_table (server-computed from public info — cards played + dummy +
+// declarer's own hand). Toggled by #opp-toggle; updates every render (trick by
+// trick). Nothing here peeks at the defenders' unplayed cards.
+function renderOpponentTable(state) {
+  const panel = document.getElementById("opp-panel");
+  const toggle = document.getElementById("opp-toggle");
+  if (!panel || !toggle) return;
+  const ot = state && state.opponent_table;
+  const on = toggle.checked && ot && ot.available;
+  panel.hidden = !on;
+  if (!on) return;
+  const SUITS = [["S", "♠"], ["H", "♥"], ["D", "♦"], ["C", "♣"]];
+  const NAME = { N: "North", E: "East", S: "South", W: "West" };
+  const cell = (s) =>
+    s.length !== null ? `<b>${s.length}</b>`          // confirmed length (shown out)
+      : s.played > 0 ? `${s.played}+`                 // at least this many seen
+        : "·";
+  const row = (d) => {
+    const cells = SUITS.map(([k]) => `<td class="opp-suit">${cell(d.suits[k])}</td>`).join("");
+    return `<tr><th>${NAME[d.seat] || d.seat}</th>${cells}` +
+      `<td class="opp-hcp">${d.hcp_shown}</td><td class="opp-left">${d.cards_left}</td></tr>`;
+  };
+  const head = `<tr><th></th>${SUITS.map(([, sym]) => `<th>${sym}</th>`).join("")}` +
+    `<th title="HCP shown so far">HCP</th><th title="cards left">left</th></tr>`;
+  const total = ot.defence_hcp != null
+    ? `<div class="opp-total">Defence holds <b>${ot.defence_hcp}</b> of the 40 HCP between them.</div>` : "";
+  document.getElementById("opp-table").innerHTML =
+    `<div class="opp-title">Opponents — known so far</div>` + total +
+    `<table class="opp-count">${head}${row(ot.defenders.lho)}${row(ot.defenders.rho)}</table>` +
+    `<div class="opp-note muted"><b>n</b> = confirmed length (suit done); n+ = at least that many seen; · = none yet.</div>`;
 }
 
 // Fire the post-play assessment tip(s) once per session, as soon as the deal
@@ -1352,6 +1386,37 @@ function computeHintLines(state) {
         readingLines.push(`If ${userRelativeLabel("W", state)}'s opening ${sym}${rank} was 4th-best, the rule of eleven says ${outside} cards above it are in the other three hands; you and dummy hold ${seenNS}, so ${userRelativeLabel("E", state)} has ${Math.max(0, outside - seenNS)}.`);
       }
     }
+
+    // 4. Evolving per-defender shape & honour placement — public info only
+    //    (cards played + show-outs). Hedged; states reads, NOT play advice.
+    const profOf = seat => ({ total: (playedBySeat[seat] || []).length, voids: showouts[seat] });
+    const dProf = { W: profOf("W"), E: profOf("E") };
+    // 4a. shape: a shown void pins where the rest of that hand must lie.
+    for (const seat of ["W", "E"]) {
+      const p = dProf[seat], who = userRelativeLabel(seat);
+      if (p.voids.size) {
+        const hidden = 13 - p.total;
+        readingLines.push(`${who} is void in ${Array.from(p.voids).join("")} — so ${who}'s remaining ${hidden} card${hidden === 1 ? "" : "s"} lie in the other suits, where length and honours rate to concentrate.`);
+      }
+    }
+    // 4b. outstanding-honour placement: void-deduction (firm), then a hedged
+    //     vacant-spaces lean once a void has skewed the shape. No play advice.
+    for (const s of SUITS) {
+      const playedRanks = new Set(), visRanks = new Set();
+      for (const cards of Object.values(playedBySeat)) for (const c of cards) if (c[0] === s.sym) playedRanks.add(c.slice(1));
+      for (const seat of ["N", "E", "S", "W"]) { const h = (state.hands || {})[seat]; if (h) for (const r of (h[s.key] || "")) visRanks.add(r); }
+      const outH = ALL_RANKS.filter(r => "AKQJ".includes(r) && !playedRanks.has(r) && !visRanks.has(r));
+      if (!outH.length) continue;
+      const tag = outH.map(r => s.sym + r).join(""), plural = outH.length > 1;
+      const wV = dProf.W.voids.has(s.sym), eV = dProf.E.voids.has(s.sym);
+      if (wV && eV) continue;
+      if (wV) { readingLines.push(`${tag} still out: LHO is void in ${s.sym}, so ${plural ? "they are" : "it is"} now marked with RHO.`); continue; }
+      if (eV) { readingLines.push(`${tag} still out: RHO is void in ${s.sym}, so ${plural ? "they are" : "it is"} now marked with LHO.`); continue; }
+      const otherVoids = seat => Array.from(dProf[seat].voids).filter(v => v !== s.sym).length;
+      const ovW = otherVoids("W"), ovE = otherVoids("E");
+      if (ovW > ovE) readingLines.push(`${tag} still out: LHO is shorter elsewhere and so longer here, ${plural ? "so they lean" : "so it leans"} LHO's way — a tendency, not pinned.`);
+      else if (ovE > ovW) readingLines.push(`${tag} still out: RHO is shorter elsewhere and so longer here, ${plural ? "so they lean" : "so it leans"} RHO's way — a tendency, not pinned.`);
+    }
   }
 
   return readingLines.concat(lines);
@@ -1569,6 +1634,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);
   document.getElementById("hint-btn").addEventListener("click", showHint);
+  const oppToggle = document.getElementById("opp-toggle");
+  if (oppToggle) {
+    try { oppToggle.checked = localStorage.getItem("oppTable") === "1"; } catch (e) {}
+    oppToggle.addEventListener("change", () => {
+      try { localStorage.setItem("oppTable", oppToggle.checked ? "1" : "0"); } catch (e) {}
+      if (lastState) renderOpponentTable(lastState);
+    });
+  }
   document.getElementById("report-btn").addEventListener("click", openReportModal);
   document.getElementById("report-cancel").addEventListener("click", closeReportModal);
   document.getElementById("report-send").addEventListener("click", sendReport);

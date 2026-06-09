@@ -683,6 +683,51 @@ class Session:
             by_seat[LETTER_SEAT[p["seat"]]].append(p["card"])
         return {SEAT_LETTER[p]: cards for p, cards in by_seat.items()}
 
+    def known_defender_table(self):
+        """Declarer-frame KNOWN facts about the two defenders, derived ONLY from
+        public information — the cards each has already played, plus dummy and
+        declarer's own hand. Never consults the defenders' unplayed cards, so it
+        cannot 'cheat'. Seat letters are rotated to the display frame by
+        _rotate_state_for_user. Returns None unless the student is declarer."""
+        if self.role != "declarer":
+            return None
+        decl, dummy = self.declarer, self.dummy
+        lho, rho = left_of(decl), left_of(dummy)   # the two defenders
+        dummy_seen = dummy in self.visible_hands()
+        defence_hcp = (40 - hand_hcp(self.initial_hands[decl])
+                       - hand_hcp(self.initial_hands[dummy])) if dummy_seen else None
+        HCP = {"A": 4, "K": 3, "Q": 2, "J": 1}
+        sym2letter = {sym: DENOM_LETTER[d] for d, sym in DENOM_SYM.items()}
+        played = self.cards_played_by_seat()        # {seat_letter: [display cards]}
+        defender_letters = {SEAT_LETTER[lho], SEAT_LETTER[rho]}
+        shown_out = {sl: set() for sl in defender_letters}
+        tricks = list(self.trick_history)
+        if self.current_trick_plays:
+            tricks.append({"plays": self.current_trick_plays})
+        for t in tricks:
+            plays = t["plays"]
+            if not plays:
+                continue
+            led = sym2letter.get(plays[0]["card"][0])
+            for p in plays[1:]:                     # the leader can't 'show out'
+                sl = p["seat"]
+                if sl in defender_letters and sym2letter.get(p["card"][0]) != led:
+                    shown_out[sl].add(led)
+        def defender(seat):
+            sl = SEAT_LETTER[seat]
+            cards = played.get(sl, [])
+            suits = {}
+            for L in ("S", "H", "D", "C"):
+                cnt = sum(1 for c in cards if sym2letter.get(c[0]) == L)
+                known = L in shown_out[sl]          # voided -> original length fixed
+                suits[L] = {"played": cnt, "length": cnt if known else None}
+            return {"seat": sl,
+                    "hcp_shown": sum(HCP.get(c[1], 0) for c in cards),
+                    "cards_left": 13 - len(cards),
+                    "suits": suits}
+        return {"available": dummy_seen, "defence_hcp": defence_hcp,
+                "defenders": {"lho": defender(lho), "rho": defender(rho)}}
+
     def state(self):
         visible = self.visible_hands()
         hands = {}
@@ -745,6 +790,7 @@ class Session:
                 "all_hcp": {SEAT_LETTER[p]: hand_hcp(self.initial_hands[p])
                             for p in self.initial_hands},
             }
+        st["opponent_table"] = self.known_defender_table()
         st["auction"] = auction_dict(self.board.auction, self.dealer)
         st["contract_str"] = f"{self.level}{DENOM_SYM[self.trump]} by {SEAT_LETTER[self.declarer]}"
         st["board_num"] = self.board.board_num
@@ -789,6 +835,12 @@ class Session:
                 play["seat"] = R(play["seat"])
         for call in st.get("auction", []):
             call["seat"] = R(call["seat"])
+
+        ot = st.get("opponent_table")
+        if ot and ot.get("defenders"):
+            for d in ot["defenders"].values():
+                if d and d.get("seat"):
+                    d["seat"] = R(d["seat"])
 
         # Present trick totals as user-pair = NS in displayed frame.
         decl_total = self.ns_tricks if self.declarer in (Player.north, Player.south) else self.ew_tricks

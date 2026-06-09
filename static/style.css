@@ -995,3 +995,16 @@ button.primary:hover { background: #16456a; }
   border-left: 4px solid #c9a833;
   border-radius: 4px;
 }
+
+/* Known-only opponent count table (toggled by #opp-toggle) */
+#opp-toggle-label { font-size: 0.85em; display: inline-flex; align-items: center; gap: 0.25em; cursor: pointer; white-space: nowrap; }
+#opp-panel { padding: 0.5em 0.75em; }
+.opp-title { font-weight: 600; margin-bottom: 0.25em; }
+.opp-total { margin-bottom: 0.4em; }
+table.opp-count { border-collapse: collapse; width: 100%; max-width: 24em; font-variant-numeric: tabular-nums; }
+table.opp-count th, table.opp-count td { padding: 0.2em 0.55em; text-align: center; border-bottom: 1px solid rgba(0,0,0,0.08); }
+table.opp-count th:first-child, table.opp-count td:first-child { text-align: left; font-weight: 600; }
+table.opp-count tr:first-child th { font-weight: 600; opacity: 0.85; }
+.opp-suit b { color: #1a7f37; }
+.opp-hcp { font-weight: 600; }
+.opp-note { font-size: 0.8em; margin-top: 0.3em; }

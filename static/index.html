@@ -63,11 +63,16 @@
             <button id="undo-btn" disabled>Undo</button>
             <div id="tricks-strip"></div>
             <button id="hint-btn" disabled title="Show card-counting facts from the trick history">Hint</button>
+            <label id="opp-toggle-label" title="Show a live table of what's known about the opponents' HCP and shape"><input type="checkbox" id="opp-toggle"> Count</label>
             <button id="review-btn" disabled title="Hold down to see the auction">Review</button>
             <button id="report-btn" disabled title="Report a problem with this deal or its coaching">🚩 Report</button>
           </div>
           <div id="slot-bottom" class="seat"></div>
         </div>
+      </div>
+
+      <div class="card" id="opp-panel" hidden>
+        <div id="opp-table"></div>
       </div>
 
       <div id="trick-summary" class="muted"></div>
