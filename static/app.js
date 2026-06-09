@@ -1247,8 +1247,9 @@ function handHcp(hand) {
   if (!hand) return 0;
   const V = { A: 4, K: 3, Q: 2, J: 1 };
   let n = 0;
-  for (const k of ["spades", "hearts", "diamonds", "clubs"])
-    for (const r of (hand[k] || "")) n += V[r] || 0;
+  // Server sends hands as letter-keyed arrays of rank abbrs: {S:["A","K"],...}
+  for (const k of ["S", "H", "D", "C"])
+    for (const r of (hand[k] || [])) n += V[r] || 0;
   return n;
 }
 
@@ -1268,11 +1269,12 @@ function showHint() {
 }
 
 function computeHintLines(state) {
+  // key is the SERVER's hand key (letter); values are arrays of rank abbrs.
   const SUITS = [
-    { sym: "♠", key: "spades" },
-    { sym: "♥", key: "hearts" },
-    { sym: "♦", key: "diamonds" },
-    { sym: "♣", key: "clubs" },
+    { sym: "♠", key: "S" },
+    { sym: "♥", key: "H" },
+    { sym: "♦", key: "D" },
+    { sym: "♣", key: "C" },
   ];
   const ALL_RANKS = "AKQJT98765432".split("");
   const RANK_ORDER = Object.fromEntries(ALL_RANKS.map((r, i) => [r, i]));
@@ -1307,8 +1309,7 @@ function computeHintLines(state) {
     for (const seat of ["N", "E", "S", "W"]) {
       const hand = (state.hands || {})[seat];
       if (!hand) continue;
-      const ranks = hand[s.key] || "";
-      for (const r of ranks.split("")) visible.add(r);
+      for (const r of (hand[s.key] || [])) visible.add(r);
     }
     // Outstanding = all - played - visible
     const outstanding = ALL_RANKS.filter(r => !played.has(r) && !visible.has(r));
@@ -1379,9 +1380,9 @@ function computeHintLines(state) {
     const lead = first ? first.plays[0] : (state.current_trick || [])[0];
     if (lead && lead.seat === "W" && decl && dummy) {
       const sym = lead.card[0], rank = lead.card.slice(1), pip = PIP[rank];
-      const KEY = { "♠":"spades", "♥":"hearts", "♦":"diamonds", "♣":"clubs" };
+      const KEY = { "♠":"S", "♥":"H", "♦":"D", "♣":"C" };
       if (pip && pip <= 9 && KEY[sym]) {
-        const higher = h => [...((h || {})[KEY[sym]] || "")].filter(r => (PIP[r] || 0) > pip).length;
+        const higher = h => ((h || {})[KEY[sym]] || []).filter(r => (PIP[r] || 0) > pip).length;
         const outside = 11 - pip, seenNS = higher(decl) + higher(dummy);
         readingLines.push(`If ${userRelativeLabel("W", state)}'s opening ${sym}${rank} was 4th-best, the rule of eleven says ${outside} cards above it are in the other three hands; you and dummy hold ${seenNS}, so ${userRelativeLabel("E", state)} has ${Math.max(0, outside - seenNS)}.`);
       }
@@ -1404,7 +1405,7 @@ function computeHintLines(state) {
     for (const s of SUITS) {
       const playedRanks = new Set(), visRanks = new Set();
       for (const cards of Object.values(playedBySeat)) for (const c of cards) if (c[0] === s.sym) playedRanks.add(c.slice(1));
-      for (const seat of ["N", "E", "S", "W"]) { const h = (state.hands || {})[seat]; if (h) for (const r of (h[s.key] || "")) visRanks.add(r); }
+      for (const seat of ["N", "E", "S", "W"]) { const h = (state.hands || {})[seat]; if (h) for (const r of (h[s.key] || [])) visRanks.add(r); }
       const outH = ALL_RANKS.filter(r => "AKQJ".includes(r) && !playedRanks.has(r) && !visRanks.has(r));
       if (!outH.length) continue;
       const tag = outH.map(r => s.sym + r).join(""), plural = outH.length > 1;
