@@ -509,6 +509,12 @@ def parse_tips(raw_pbn_text: str) -> list[dict]:
         return []
     body = _substitute_suits(tail[open_pos + 1:close_pos])
     _, tips_section = _split_bidding_and_tips(body)
+    # [PLAY ...] interactive-quiz decisions live after the whole-hand tips in the
+    # same block; cut them off so they don't leak into the last tip's prose
+    # (parse_play_coaching reads them separately).
+    pm = _PLAY_RE.search(tips_section)
+    if pm:
+        tips_section = tips_section[:pm.start()]
     if not tips_section:
         return []
 
@@ -524,6 +530,75 @@ def parse_tips(raw_pbn_text: str) -> list[dict]:
         if text:
             tips.append({"role": role, "stage": stage, "reveals": reveals, "text": text})
     return tips
+
+
+# A per-decision play-coaching marker: [PLAY <trick> <seat> <card>] anchors an
+# interactive quiz to one student play (mirrors bidding's [BID]). [WHY] splits
+# the prose shown BEFORE the play (withholds the answer) from the prose shown on
+# success / 2nd-miss reveal. [ACCEPT <card> ...] lists co-correct cards. Suits
+# are already substituted to symbols when this runs (see parse_play_coaching).
+_PLAY_RE = re.compile(
+    r'\[PLAY\s+(\d+)\s+([NESW])\s+([♠♥♦♣])\s*([2-9TJQKA])\]', re.IGNORECASE)
+_WHY_RE = re.compile(r'\[WHY\]', re.IGNORECASE)
+_PLAY_CARD_TOKEN_RE = re.compile(r'([♠♥♦♣])\s*([2-9TJQKA])', re.IGNORECASE)
+
+
+def _card_dict(sym: str, rank_ch: str) -> dict:
+    """A card as {suit: letter, rank: char} — the same shape the frontend gets
+    in state.legal_moves, so it can compare a clicked card directly."""
+    return {"suit": DENOM_LETTER[_DENOM_FROM_SYM[sym]], "rank": rank_ch.upper()}
+
+
+def _extract_play_accepts(prose: str) -> tuple[list[dict], str]:
+    """Pull [ACCEPT <card> ...] card tokens from a play chunk (co-correct cards),
+    returning (cards, cleaned_prose)."""
+    accepts: list[dict] = []
+    def collect(m):
+        for tok in _PLAY_CARD_TOKEN_RE.finditer(m.group(1)):
+            accepts.append(_card_dict(tok.group(1), tok.group(2)))
+        return ""
+    cleaned = _ACCEPT_RE.sub(collect, prose)
+    cleaned = re.sub(r'[ \t]+\n', '\n', cleaned).strip()
+    return accepts, cleaned
+
+
+def parse_play_coaching(raw_pbn_text: str) -> list[dict] | None:
+    """Parse [PLAY ...] interactive play-quiz decisions from a board's
+    post-auction { ... } block. Returns an ordered list of
+    {"trick": int, "seat": str (real compass), "correct": {suit,rank},
+     "accept": [{suit,rank}...], "present": str, "why": str}, or None if the
+    board carries no [PLAY] markers (then play behaves exactly as before)."""
+    auction_match = re.search(r'\[Auction\s+"[^"]*"\]', raw_pbn_text)
+    if not auction_match:
+        return None
+    tail = raw_pbn_text[auction_match.end():]
+    open_pos = tail.find('{')
+    if open_pos == -1:
+        return None
+    close_pos = tail.find('}', open_pos)
+    if close_pos == -1:
+        return None
+    body = _substitute_suits(tail[open_pos + 1:close_pos])
+    matches = list(_PLAY_RE.finditer(body))
+    if not matches:
+        return None
+    out: list[dict] = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        chunk = body[start:end]
+        wm = _WHY_RE.search(chunk)
+        present, why = (chunk[:wm.start()], chunk[wm.end():]) if wm else (chunk, "")
+        accepts, present = _extract_play_accepts(present)
+        out.append({
+            "trick": int(m.group(1)),
+            "seat": m.group(2).upper(),
+            "correct": _card_dict(m.group(3), m.group(4)),
+            "accept": accepts,
+            "present": present.strip(),
+            "why": why.strip(),
+        })
+    return out or None
 
 
 # ---------- session state ----------
@@ -596,6 +671,13 @@ class Session:
         # (declarer + defender). Empty when the PBN ships no [ROLE]/[STAGE]
         # markers — frontend just skips the tip-phase pause.
         self.tips: list[dict] = []
+        # Interactive play-quiz decisions ([PLAY ...] markers), in author
+        # real-compass frame. None when the board has no [PLAY] markers, in
+        # which case play behaves exactly as before (manual, no quiz). The
+        # cursor tracks how many decisions have been reached/consumed so the
+        # auto-play-between-decisions walk knows what to stop at next.
+        self.play_coaching: list[dict] | None = None
+        self._play_cursor: int = 0
         # Textbook opening lead card, extracted from the leader pre-lead tip
         # at session start. When role != leader, auto_play_until_user uses
         # this in place of dds_pick for the opening lead, so the table
@@ -813,6 +895,13 @@ class Session:
         # frontend uses rotation_shift to map [show N] → display seat.
         st["coaching"] = self.coaching
         st["tips"] = self.tips
+        # Play-quiz decisions stay in author real-compass frame too; only each
+        # decision's `seat` is rotated to the display frame below (the cards are
+        # frame-invariant). Shallow-copy each dict so the rotation doesn't mutate
+        # the session's stored real-compass seats.
+        st["play_coaching"] = ([dict(d) for d in self.play_coaching]
+                               if self.play_coaching else None)
+        st["play_cursor"] = self._play_cursor
         st["rotation_shift"] = self._rotation_shift
         # All four initial hands — only consulted by the frontend during the
         # tutorial phase, where the [show X] directives need to reveal hands
@@ -849,6 +938,10 @@ class Session:
                 play["seat"] = R(play["seat"])
         for call in st.get("auction", []):
             call["seat"] = R(call["seat"])
+
+        # Play decisions: rotate only the acting seat (cards are frame-invariant).
+        for dec in (st.get("play_coaching") or []):
+            dec["seat"] = R(dec["seat"])
 
         ot = st.get("opponent_table")
         if ot and ot.get("defenders"):
@@ -888,22 +981,55 @@ class Session:
             raise HTTPException(400, "card is not a legal move")
         self._play_card(match)
 
+    def _auto_card(self):
+        """The card the trainer auto-plays at the current position: the textbook
+        opening lead on trick 1 (so the table matches the pre-lead prose), else
+        DDS's best card."""
+        if (self.cards_played_count == 0
+                and self.deal.curplayer == self.leader
+                and self.recommended_lead is not None
+                and self.recommended_lead in list(self.deal.legal_moves())):
+            return self.recommended_lead
+        return dds_pick(self.deal)
+
     def auto_play_until_user(self):
         """After a user play, run DDS for any defender/dummy-seat-the-computer-controls turns
         until it's user's turn again, or the deal completes."""
         while not self.complete and self.deal.curplayer not in self.user_seats:
-            # On the opening lead, prefer the textbook card from the leader
-            # pre-lead tip (when available and legal) so the post-lead tip
-            # prose matches what's actually on the table. Fall back to DDS
-            # if the card isn't extractable or isn't a legal lead.
-            if (self.cards_played_count == 0
-                    and self.deal.curplayer == self.leader
-                    and self.recommended_lead is not None
-                    and self.recommended_lead in list(self.deal.legal_moves())):
-                card = self.recommended_lead
-            else:
-                card = dds_pick(self.deal)
-            self._play_card(card)
+            self._play_card(self._auto_card())
+
+    def _decision_card_legal(self, dec) -> bool:
+        suit = SUIT_FROM_CHAR.get(dec["correct"]["suit"])
+        rank = RANK_FROM_CHAR.get(dec["correct"]["rank"])
+        return any(c.suit == suit and c.rank == rank for c in self.deal.legal_moves())
+
+    def auto_play_until_decision(self):
+        """Quiz mode (boards with [PLAY] markers). Auto-play EVERY seat — including
+        the student's declarer and dummy — until the next authored decision's
+        position is reached (its trick + seat, with its correct card legal), then
+        stop so the frontend can quiz it. The student only acts at decisions; the
+        routine cards in between play themselves, exactly as the auction animates
+        between the student's bids. A decision the board never reaches (divergence
+        from the authored line) is skipped — graceful degradation, like an
+        unmatched [BID]. Returns the pending decision dict, or None when the deal
+        has been played to completion with no further decision."""
+        decisions = self.play_coaching or []
+        while self._play_cursor < len(decisions):
+            dec = decisions[self._play_cursor]
+            target = LETTER_SEAT[dec["seat"]]
+            while not self.complete:
+                cur_trick = len(self.trick_history) + 1
+                if cur_trick > dec["trick"]:
+                    break  # overshot this decision (resolved or diverged) → skip
+                if cur_trick == dec["trick"] and self.deal.curplayer == target:
+                    if self._decision_card_legal(dec):
+                        return dec
+                    break  # at the seat but correct card not legal → diverged
+                self._play_card(self._auto_card())
+            self._play_cursor += 1
+        while not self.complete:          # no more decisions: play it out
+            self._play_card(self._auto_card())
+        return None
 
     def _apply_card(self, card):
         """Advance the deal + bookkeeping by one card. Does NOT touch move_log."""
@@ -1114,6 +1240,11 @@ def start_session(body: StartSessionBody):
         # roles' tips (not just the user's) — the user might be playing
         # declarer or defender but we still need the leader's textbook card.
         sess.recommended_lead = extract_recommended_lead(all_tips)
+        # Interactive play-quiz decisions — declarer role only for now (the
+        # student controls declarer + dummy, the seats the [PLAY] decisions
+        # anchor to). Other roles play normally.
+        if sess.role == "declarer":
+            sess.play_coaching = parse_play_coaching(board_slices[idx])
     # When the scenario ships with embedded coaching, the bidding tutorial
     # addresses the student as "you" — convention is Student=S (real). Override
     # the role-derived seat so south sits at the bottom of the table and the
@@ -1183,6 +1314,20 @@ def start_play(sid: str):
         raise HTTPException(404, "session not found")
     sess.auto_play_until_user()
     return {"state": sess.state()}
+
+
+@app.post("/api/session/{sid}/advance-to-decision")
+def advance_to_decision(sid: str):
+    """Quiz mode (boards with [PLAY] markers): auto-play every seat to the next
+    authored play decision and stop. Returns the new state plus pending_decision
+    = the index into state.play_coaching the frontend should now quiz, or null
+    when the deal was played out with no further decision."""
+    sess = SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    dec = sess.auto_play_until_decision()
+    pending = sess._play_cursor if dec is not None else None
+    return {"state": sess.state(), "pending_decision": pending}
 
 
 @app.post("/api/session/{sid}/undo")

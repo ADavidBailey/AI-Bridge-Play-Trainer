@@ -805,6 +805,16 @@ button.primary:hover { background: #16456a; }
   border-left: 4px solid #c08a2d;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
+.card-quiz-prompt {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-weight: 600;
+  color: #2c5d8a;
+  background: #eef4fb;
+  border: 1px solid #c2d7ec;
+  border-radius: 6px;
+  text-align: center;
+}
 
 /* Bidding quiz box, rendered inside the coaching panel during the
    auction-replay animation. */

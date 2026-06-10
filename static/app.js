@@ -166,7 +166,10 @@ function renderHand(hand, opts) {
         const cls = `card-btn ${suitClass(suit)} ${isLegal ? "legal" : "illegal"}`;
         const btn = el("span", {
           class: cls,
-          ...(isLegal ? { onclick: () => playCard(suit, rank) } : {}),
+          // During a play quiz a legal-card click answers the quiz instead of
+          // committing the card (the quiz loop commits it once resolved).
+          ...(isLegal ? { onclick: () => (cardQuizResolve
+            ? onCardQuizClick(suit, rank) : playCard(suit, rank)) } : {}),
         }, rank);
         row.appendChild(btn);
       }
@@ -679,6 +682,7 @@ async function startSession() {
     tutorialReveals = new Set();
     tutorialContinueResolve = null;
     bidQuizResolve = null;
+    cardQuizResolve = null;
     startPlayInFlight = false;
     postPlayTipFiredFor = null;
     document.getElementById("inference-panel").hidden = true;
@@ -1062,6 +1066,87 @@ function onBidQuizClick(callCode) {
   if (r) r(callCode);
 }
 
+// --- play quiz ---
+//
+// The play analogue of the bidding quiz. On boards that carry [PLAY] markers
+// (state.play_coaching), the trainer auto-plays every seat to each authored
+// decision, presents the coaching, then waits for the user to click a card in
+// their own hand. Correct → praise + why; wrong → coach + retry; 2nd miss →
+// explain and play the correct card. Between decisions the hand plays itself,
+// exactly as the auction animates between the student's bids.
+
+let cardQuizResolve = null;            // resolve() of the in-flight card quiz
+
+function presentCardQuiz() {
+  return new Promise(resolve => {
+    cardQuizResolve = resolve;
+    renderCoachingPanel();
+  });
+}
+
+function onCardQuizClick(suit, rank) {
+  const r = cardQuizResolve;
+  cardQuizResolve = null;
+  if (r) r({ suit, rank });
+}
+
+const cardLabel = (c) => `${SUIT_SYMBOL[c.suit] || ""}${c.rank}`;
+
+async function runPlayQuizLoop() {
+  while (sessionId) {
+    let adv;
+    try {
+      adv = await api(`/api/session/${sessionId}/advance-to-decision`, { method: "POST" });
+    } catch (e) {
+      console.warn("advance-to-decision failed:", e);
+      return;
+    }
+    render(adv.state);
+    const pending = adv.pending_decision;
+    if (pending == null) return;                 // no more decisions — deal played out
+    const dec = (adv.state.play_coaching || [])[pending];
+    if (!dec) return;
+
+    // Present the decision prose (withholds the answer).
+    await presentChunkPassive({ text: dec.present }, 0);
+
+    const okKeys = new Set([
+      `${dec.correct.suit}${dec.correct.rank}`,
+      ...(dec.accept || []).map(c => `${c.suit}${c.rank}`),
+    ]);
+    let toPlay = null;                            // the card actually committed
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const pick = await presentCardQuiz();
+      if (!sessionId) return;
+      if (okKeys.has(`${pick.suit}${pick.rank}`)) {
+        coachingTips.push({ quizResult: "ok", text: `✓ ${pickOne(PRAISE_LINES)} ${dec.why}` });
+        toPlay = pick;
+        renderCoachingPanel();
+        break;
+      }
+      if (attempt === 1) {
+        coachingTips.push({ quizResult: "miss",
+          text: `✗ The ${cardLabel(pick)} isn't the one. ${pickOne(RETRY_LINES)}` });
+        renderCoachingPanel();
+      } else {
+        coachingTips.push({ quizResult: "miss",
+          text: `✗ The ${cardLabel(pick)}. ${dec.why}` });
+        toPlay = dec.correct;                     // 2nd miss → play the correct card
+        renderCoachingPanel();
+      }
+    }
+
+    try {
+      const played = await api(`/api/session/${sessionId}/play`,
+        { method: "POST", body: JSON.stringify({ suit: toPlay.suit, rank: toPlay.rank }) });
+      render(played.state);
+    } catch (e) {
+      console.warn("play (quiz) failed:", e);
+      return;
+    }
+  }
+}
+
 // Normalise a call code so "1NT" / "1N" / "1nt" all compare equal, and the
 // server's "1♣" → "1C" form lines up with what the bid box emits ("1C").
 function normaliseBidForCompare(s) {
@@ -1209,6 +1294,11 @@ async function startPlay() {
         }
         await presentTipsForStage(tips, "auction-end", role);
         await presentTipsForStage(tips, "post-lead", role);
+        // Interactive play quiz: boards with [PLAY] markers hand off to the
+        // per-decision quiz loop (the whole-hand tips above set the scene).
+        if (Array.isArray(lastState.play_coaching) && lastState.play_coaching.length) {
+          await runPlayQuizLoop();
+        }
       }
     } catch (e) {
       console.warn("start-play failed:", e);
@@ -1437,7 +1527,8 @@ function userRelativeLabel(seat, state) {
 }
 
 async function undoLast() {
-  if (!sessionId || trickFreeze) return;
+  // Block undo while a play-quiz prompt is live — the quiz drives the deal.
+  if (!sessionId || trickFreeze || cardQuizResolve) return;
   try {
     const data = await api(`/api/session/${sessionId}/undo`, { method: "POST" });
     viewingLastTrick = false;
@@ -1596,7 +1687,7 @@ function renderCoachingPanel() {
     syncSidebarVisibility();
     return;
   }
-  if (coachingTips.length === 0 && !tutorialContinueResolve && !bidQuizResolve) {
+  if (coachingTips.length === 0 && !tutorialContinueResolve && !bidQuizResolve && !cardQuizResolve) {
     panel.hidden = true;
     syncSidebarVisibility();
     return;
@@ -1623,7 +1714,10 @@ function renderCoachingPanel() {
     card.appendChild(textDiv);
     body.appendChild(card);
   }
-  if (bidQuizResolve) {
+  if (cardQuizResolve) {
+    body.appendChild(el("div", { class: "card-quiz-prompt" },
+      "👉 Click a card in your hand to play it."));
+  } else if (bidQuizResolve) {
     body.appendChild(renderBidBox());
   } else if (tutorialContinueResolve) {
     // When the deal is over (post-play tip is the final thing), Continue
