@@ -544,6 +544,20 @@ class Session:
         self.tricks_needed = 6 + self.level
 
         if role == "declarer":
+            # Curation guard: a declarer lesson must be declared by the student's
+            # own side. Competitive auctions in the raw bba pool sometimes push
+            # the final contract to the opponents (e.g. 3SX by East) — admitting
+            # such a board would silently seat the student at the Student tag as
+            # a *defender*, contradicting the role. Reject it here so it never
+            # starts (start_session turns the ValueError into a 400). [#31]
+            student_seat = LETTER_SEAT.get(board.info.get("Student", "S"), Player.south)
+            if self.declarer not in (student_seat, partner_of(student_seat)):
+                raise ValueError(
+                    f"board {board.board_num}: declarer-role scenario but the "
+                    f"contract is declared by {SEAT_LETTER[self.declarer]} "
+                    f"(opponents of student {SEAT_LETTER[student_seat]}); a "
+                    f"declarer lesson must be played by the student's side"
+                )
             self.user_seats = {self.declarer, self.dummy}
             self._user_seat = self.declarer
         elif role == "leader":
