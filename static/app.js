@@ -1337,7 +1337,12 @@ function computeHintLines(state) {
   const readingLines = [];
   if (state.role === "declarer") {
     const HV = { A: 4, K: 3, Q: 2, J: 1 };
-    const decl = (state.hands || {}).S, dummy = (state.hands || {}).N;
+    // Read the declarer/dummy holdings from the ORIGINAL deal, not state.hands
+    // (which depletes as cards are played). The HCP complement and rule-of-11
+    // below reason about the full deal, so they must stay fixed across tricks —
+    // otherwise "you and dummy hold N HCP" shrinks toward 0 as honors are
+    // played and "the defence has 40-N" becomes nonsense. (Issue #32)
+    const decl = (state.initial_hands || {}).S, dummy = (state.initial_hands || {}).N;
     const playedW = playedBySeat.W || [], playedE = playedBySeat.E || [];
     const ptsPlayed = cards => cards.reduce((n, c) => n + (HV[c.slice(1)] || 0), 0);
 
