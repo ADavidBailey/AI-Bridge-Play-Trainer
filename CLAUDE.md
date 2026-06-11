@@ -20,7 +20,7 @@ Then open http://localhost:8765/. There is no test suite, lint config, or build 
 
 The repo ships code only. Scenario PBNs and the menu-layout files live **outside** this repo, by default at `/Users/adavidbailey/Practice-Bidding-Scenarios/`. The server expects:
 
-- `<DATA_ROOT>/coaching/<scenario>.pbn` — loaded **first** if present (the tutorial/coaching version of a scenario).
+- `<DATA_ROOT>/coaching/<scenario>.pbn` — loaded **first** if present (the tutorial/coaching version of a scenario). This is a **served/generated** directory in Practice-Bidding-Scenarios: prose is authored in that repo's `coaching-curated/` (staging) and promoted into `coaching/` only after passing the gate suite, via `python3 -P py/promote.py` over there. The trainer just reads `coaching/`; never expect to hand-edit it.
 - `<DATA_ROOT>/bba/<scenario>.pbn` — fallback when no `coaching/` file exists. `_scenario_pbn_path` ([server.py:36](server.py#L36)) resolves this precedence.
 - `<DATA_ROOT>/btn/-button-layout-release.txt` (or `-beta.txt`) — defines the menu sections and which scenarios appear under each.
 
