@@ -522,7 +522,7 @@ function render(state) {
   // Deal/contract sits on the top line, right of the scenario name (#20);
   // the old second status line is left empty (collapsed via #status-line:empty).
   const titleDeal = document.getElementById("title-deal");
-  if (titleDeal) titleDeal.textContent = `Deal ${state.board_num} · ${statusContract}`;
+  if (titleDeal) titleDeal.textContent = `Deal ${state.board_index + 1} · ${statusContract}`;
   document.getElementById("status-line").textContent = "";
   document.getElementById("game").hidden = false;
   document.getElementById("claim-btn").disabled = state.complete;
@@ -658,14 +658,16 @@ function applyMenuFilter(query) {
 async function onScenarioClick(name) {
   currentScenario = name;
   highlightActiveScenario(name);
-  // When the user clicks a new scenario, reset board index to 0 and start.
-  document.getElementById("board-index").value = "0";
+  // When the user clicks a new scenario, reset to the first deal and start.
+  document.getElementById("board-index").value = "1";
   await startSession();
 }
 
 async function startSession() {
   if (!currentScenario) return;
-  const boardIndex = parseInt(document.getElementById("board-index").value, 10) || 0;
+  // The field is the 1-based "Deal N" the UI shows; the API wants 0-based.
+  const dealNo = parseInt(document.getElementById("board-index").value, 10) || 1;
+  const boardIndex = dealNo - 1;
   const role = document.getElementById("role-select").value || "declarer";
   const randomlyRotate = document.getElementById("randomly-rotate").checked;
   try {
@@ -676,7 +678,7 @@ async function startSession() {
     sessionId = data.session_id;
     closeScenariosView();
     if (data.board_index != null) {
-      document.getElementById("board-index").value = String(data.board_index);
+      document.getElementById("board-index").value = String(data.board_index + 1);
     }
     coachingTips = [];
     tutorialReveals = new Set();
@@ -1739,6 +1741,10 @@ function renderCoachingPanel() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("next-deal-btn").addEventListener("click", nextDeal);
+  // Typing a Deal number and committing (Enter/blur) jumps straight to it.
+  document.getElementById("board-index").addEventListener("change", () => {
+    if (currentScenario) startSession();
+  });
   document.getElementById("claim-btn").addEventListener("click", claimRest);
   document.getElementById("undo-btn").addEventListener("click", undoLast);
   document.getElementById("replay-btn").addEventListener("click", replayDeal);

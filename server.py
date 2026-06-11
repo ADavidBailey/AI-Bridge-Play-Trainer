@@ -662,6 +662,9 @@ class Session:
         self.ns_tricks = 0
         self.ew_tricks = 0
         self.complete = False
+        # Position of this board in the scenario's deck (0-based), set by
+        # start_session. The UI shows it 1-based as "Deal N".
+        self.board_index = 0
         # Set by start_session after parsing the PBN's post-auction prose block.
         # None means the scenario file has no embedded tutorial — frontend then
         # uses the existing instant-reveal path.
@@ -890,6 +893,7 @@ class Session:
         st["auction"] = auction_dict(self.board.auction, self.dealer)
         st["contract_str"] = f"{self.level}{DENOM_SYM[self.trump]} by {SEAT_LETTER[self.declarer]}"
         st["board_num"] = self.board.board_num
+        st["board_index"] = self.board_index
         st["scenario"] = self.board.info.get("Event", "?")
         # Coaching chunks stay in the author's real-compass frame; the
         # frontend uses rotation_shift to map [show N] → display seat.
@@ -1198,6 +1202,7 @@ def start_session(body: StartSessionBody):
         sess = Session(boards[idx], role=body.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    sess.board_index = idx
     board_slices = _split_pbn_by_board(raw_text)
     # Decide which seat the student occupies. Default: the PBN's Student tag
     # (convention S). With randomly_rotate, pick randomly among the bidding
@@ -1449,12 +1454,13 @@ def _build_issue(sess, note: str):
     else:
         phase = f"playing — trick {len(sess.trick_history) + 1}"
     note_clean = _sanitize_note(note)
-    title = f"Feedback: {scenario} · board {board_num} · {role}"
+    deal_no = sess.board_index + 1
+    title = f"Feedback: {scenario} · Deal {deal_no} · {role}"
     body = (
         f"**User says:** {note_clean}\n\n"
         f"---\n"
         f"*auto-captured:*\n"
-        f"- Scenario: **{scenario}** · Board: **{board_num}** · Role: **{role}**\n"
+        f"- Scenario: **{scenario}** · Deal: **{deal_no}** (source board {board_num}) · Role: **{role}**\n"
         f"- Contract: {contract} · {phase}\n"
         f"- Auction: {auction}\n"
         f"- Deal (PBN): `{_deal_pbn(sess)}`\n"
