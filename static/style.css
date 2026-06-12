@@ -574,6 +574,11 @@ button.primary:hover { background: #16456a; }
 .seat.active {
   outline: 3px solid var(--accent);
   outline-offset: -2px;
+}
+/* The accent outline marks whose turn it is. Apply the light fill only when the
+   hand is visible — a hidden seat keeps its face-down hatch so "Hidden" always
+   reads as hidden and the highlight isn't mistaken for a reveal. */
+.seat.active:not(.face-down) {
   background: #f4f9fc;
 }
 
