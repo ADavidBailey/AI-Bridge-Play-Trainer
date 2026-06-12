@@ -302,8 +302,15 @@ def build_playlist(raw_text: str, opener_n: int = 3,
     rng.shuffle(textbook)
     opener = textbook[:opener_n]
     if len(opener) < opener_n:
-        for i in sorted((j for j in range(n) if j not in opener),
-                        key=lambda j: tiers[j][1]):
+        # Top up from the remaining boards, easiest first. Shuffle BEFORE the
+        # stable sort so ties (e.g. every untiered board defaults to difficulty
+        # 99) break randomly rather than falling back to file order — otherwise
+        # a scenario with no textbook tier would open every session with the
+        # same boards 0,1,2 in the same order, and the student would never see
+        # a different opening set.
+        rest = [j for j in range(n) if j not in opener]
+        rng.shuffle(rest)
+        for i in sorted(rest, key=lambda j: tiers[j][1]):
             if len(opener) >= opener_n:
                 break
             opener.append(i)
