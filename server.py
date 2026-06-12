@@ -266,6 +266,52 @@ def _split_pbn_by_board(text: str) -> list[str]:
     return [p for p in parts if p.lstrip().startswith("[Event")]
 
 
+_CURATE_RE = re.compile(r'\{Curate\n(.*?)\n\}', re.S)
+
+
+def _board_tier(slice_text: str) -> tuple[str | None, int]:
+    """(tier, difficulty) from a board's {Curate} block. Axis = 'declarer'
+    for play lessons (slice carries [ROLE] tips), else 'bidding'. difficulty
+    defaults high so untiered boards sort to the back."""
+    m = _CURATE_RE.search(slice_text)
+    if not m:
+        return None, 99
+    fields = {}
+    for line in m.group(1).splitlines():
+        if ':' in line:
+            k, v = line.split(':', 1)
+            fields[k.strip()] = v.strip()
+    axis = 'declarer' if '[ROLE' in slice_text else 'bidding'
+    raw = fields.get(axis)
+    tier = raw.split()[0] if raw else None
+    diff = int(fields['difficulty']) if fields.get('difficulty', '').isdigit() else 99
+    return tier, diff
+
+
+def build_playlist(raw_text: str, opener_n: int = 3,
+                   rng: random.Random | None = None) -> list[int]:
+    """0-based board-index positions in play order: up to opener_n random
+    textbook boards, then every remaining board shuffled. Opener excluded
+    from the tail (no early repeat); if fewer than opener_n textbook boards
+    exist, top the opener up with the lowest-difficulty remaining boards."""
+    rng = rng or random
+    slices = _split_pbn_by_board(raw_text)
+    n = len(slices)
+    tiers = [_board_tier(s) for s in slices]
+    textbook = [i for i in range(n) if tiers[i][0] == 'textbook']
+    rng.shuffle(textbook)
+    opener = textbook[:opener_n]
+    if len(opener) < opener_n:
+        for i in sorted((j for j in range(n) if j not in opener),
+                        key=lambda j: tiers[j][1]):
+            if len(opener) >= opener_n:
+                break
+            opener.append(i)
+    tail = [i for i in range(n) if i not in opener]
+    rng.shuffle(tail)
+    return opener + tail
+
+
 def _auction_pbn_calls(auction) -> list[str]:
     """Render an auction as PBN-style call strings (1C, 2D, 3NT, X, XX, Pass)."""
     out = []
@@ -1108,6 +1154,19 @@ def list_scenarios():
     files = sorted({p.stem for d in (CURATED_DIR, COACHING_DIR)
                     for p in d.glob("*.pbn") if not p.stem.startswith("-")})
     return {"scenarios": files}
+
+
+class PlaylistBody(BaseModel):
+    scenario: str
+    opener_n: int = 3
+
+
+@app.post("/api/playlist")
+def make_playlist(body: PlaylistBody):
+    path = _scenario_pbn_path(body.scenario)
+    if path is None:
+        raise HTTPException(404, f"scenario not found: {body.scenario}")
+    return {"order": build_playlist(path.read_text(), opener_n=body.opener_n)}
 
 
 LAYOUT_PATHS = [

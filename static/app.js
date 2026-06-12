@@ -605,6 +605,7 @@ function postPlayContextLine(state) {
 // ---------- actions ----------
 
 let currentScenario = null;
+let playlist = null;   // file board-indexes in play order, or null = file order
 
 async function loadMenu() {
   const data = await api("/api/menu");
@@ -658,16 +659,26 @@ function applyMenuFilter(query) {
 async function onScenarioClick(name) {
   currentScenario = name;
   highlightActiveScenario(name);
-  // When the user clicks a new scenario, reset to the first deal and start.
+  // Build this session's deal order (textbook on-ramp, then shuffled remainder).
+  try {
+    const pl = await api("/api/playlist", {
+      method: "POST", body: JSON.stringify({ scenario: name }),
+    });
+    playlist = (pl && pl.order && pl.order.length) ? pl.order : null;
+  } catch (e) { playlist = null; }      // fall back to straight file order
   document.getElementById("board-index").value = "1";
   await startSession();
 }
 
 async function startSession() {
   if (!currentScenario) return;
-  // The field is the 1-based "Deal N" the UI shows; the API wants 0-based.
+  // The field is the 1-based session "Deal N" the UI shows; translate it
+  // through this session's playlist to the file board-index the API serves.
   const dealNo = parseInt(document.getElementById("board-index").value, 10) || 1;
-  const boardIndex = dealNo - 1;
+  const pos = dealNo - 1;
+  const boardIndex = (playlist && playlist.length)
+    ? playlist[((pos % playlist.length) + playlist.length) % playlist.length]
+    : pos;
   const role = document.getElementById("role-select").value || "declarer";
   const randomlyRotate = document.getElementById("randomly-rotate").checked;
   try {
@@ -677,8 +688,10 @@ async function startSession() {
     });
     sessionId = data.session_id;
     closeScenariosView();
+    // Keep the field showing the SESSION deal number (the playlist position),
+    // not the file board-index the server echoes back.
     if (data.board_index != null) {
-      document.getElementById("board-index").value = String(data.board_index + 1);
+      document.getElementById("board-index").value = String(pos + 1);
     }
     coachingTips = [];
     tutorialReveals = new Set();
