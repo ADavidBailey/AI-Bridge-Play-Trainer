@@ -676,9 +676,18 @@ async function startSession() {
   // through this session's playlist to the file board-index the API serves.
   const dealNo = parseInt(document.getElementById("board-index").value, 10) || 1;
   const pos = dealNo - 1;
-  const boardIndex = (playlist && playlist.length)
-    ? playlist[((pos % playlist.length) + playlist.length) % playlist.length]
-    : pos;
+  let boardIndex;
+  if (playlist && playlist.length) {
+    // During the curated pass, present deals in playlist order (no repeats).
+    // Once the student has been through the whole set, keep going by serving a
+    // uniformly random deal each time — no "don't reuse" guard, so any deal
+    // (including one seen recently) can come up again.
+    boardIndex = (pos >= 0 && pos < playlist.length)
+      ? playlist[pos]
+      : playlist[Math.floor(Math.random() * playlist.length)];
+  } else {
+    boardIndex = pos;
+  }
   const role = document.getElementById("role-select").value || "declarer";
   const randomlyRotate = document.getElementById("randomly-rotate").checked;
   try {
