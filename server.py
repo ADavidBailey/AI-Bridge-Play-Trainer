@@ -55,6 +55,8 @@ CURATED_DIR = DATA_ROOT / "coaching-curated"
 STATIC_DIR = APP_DIR / "static"
 GITHUB_REPO = "ADavidBailey/AI-Bridge-Play-Trainer"  # in-app feedback files issues here
 
+import partner_bidding as pb  # shared bidding engine (Claude partner seat + BBA robots)
+
 
 def _scenario_pbn_path(scenario: str) -> Path | None:
     """Resolve a scenario to its PBN, preferring the pipeline-generated
@@ -1577,6 +1579,207 @@ async def report_feedback(sid: str, body: ReportBody):
 @app.get("/")
 def root():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+# ---------- Phase 1: interactive bidding (you = South, Claude = North, robots E/W) ----------
+
+BIDDING_SESSIONS: dict[str, "BidSession"] = {}
+
+
+def _anthropic_client():
+    """Anthropic client if ANTHROPIC_API_KEY is set, else None (BBA stub fallback)."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic
+        return anthropic.Anthropic()
+    except Exception:
+        return None
+
+
+class BidSession:
+    """One interactive bidding deal. South is the user; North is Claude (or a
+    BBA stub when no API key); East/West are BBA robots. Real compass == display
+    frame (the user is genuinely South), so no rotation is needed."""
+
+    def __init__(self, scenario: str, board_index: int | None):
+        board, di, vul, deal_pbn, idx, n = pb.load_board(scenario, board_index)
+        self.scenario = scenario
+        self.board_index = idx
+        self.n_boards = n
+        self.deal = board.deal
+        self.dealer_idx = di
+        self.dealer = pb.SEATS[di]
+        self.vul = vul
+        self.cc = str(pb.DEFAULT_CC)
+        self.bba_input = pb.write_bba_input(deal_pbn, self.dealer, vul)
+        self.calls: list[str] = []
+        self.meta: list[dict] = []          # parallel to calls: {seat, call, engine, reason}
+        self.client = _anthropic_client()
+        self.review: str | None = None
+        self.bba_compare: list[str] | None = None
+        self._finalized = False
+        self.compare_ms = None      # timing instrumentation (what's fast vs slow)
+        self.review_ms = None
+        # No auto-advance: the client drives one seat at a time via /step so
+        # each robot/Claude call is revealed as it's made, not in a batch.
+
+    def _record(self, seat: str, call: str, engine: str, reason: str = ""):
+        self.calls.append(call)
+        self.meta.append({"seat": seat, "call": call, "engine": engine, "reason": reason})
+
+    def step(self):
+        """Advance exactly ONE non-user seat (Claude N or BBA E/W). No-op when
+        it's South's turn; finalizes (compare + review) when the auction ends.
+        The client calls this repeatedly so each call appears as it's made."""
+        if pb.auction_over(self.calls):
+            self._finalize()
+            return
+        seat = pb.seat_at(self.dealer_idx, len(self.calls))
+        if seat == "S":
+            return
+        t0 = time.perf_counter()
+        if seat == "N" and self.client is not None:
+            legal = pb.legal_calls(self.calls, self.dealer_idx)
+            call, reason = pb.claude_next_call(self.client, self.deal.north,
+                                               self.calls, self.dealer, self.vul, legal)
+            self._record("N", call, "Claude", reason)
+        else:
+            call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
+            engine = "Claude (BBA stub — no API key)" if seat == "N" else "Robot (BBA)"
+            self._record(seat, call, engine, "")
+        ms = round((time.perf_counter() - t0) * 1000)
+        self.meta[-1]["ms"] = ms
+        print(f"[bid-timing] {seat} {self.meta[-1]['engine'].split()[0]} {call}: {ms} ms", flush=True)
+        if pb.auction_over(self.calls):
+            self._finalize()
+
+    def user_call(self, call: str):
+        if pb.auction_over(self.calls):
+            raise ValueError("the auction is already over")
+        if pb.seat_at(self.dealer_idx, len(self.calls)) != "S":
+            raise ValueError("it is not your turn")
+        if call not in pb.legal_calls(self.calls, self.dealer_idx):
+            raise ValueError(f"illegal call: {call}")
+        self._record("S", call, "You", "")
+        if pb.auction_over(self.calls):   # your pass/bid can itself end the auction
+            self._finalize()
+
+    def _finalize(self):
+        if self._finalized:
+            return
+        self._finalized = True
+        t0 = time.perf_counter()
+        try:
+            self.bba_compare = pb.full_bba_auction(self.bba_input, self.cc, self.cc)
+        except Exception:
+            self.bba_compare = None
+        self.compare_ms = round((time.perf_counter() - t0) * 1000)
+        if self.client is not None:
+            t1 = time.perf_counter()
+            try:
+                hands = {s: pb.hand_lines(hand_of(self.deal, LETTER_SEAT[s]))
+                         for s in ("N", "E", "S", "W")}
+                self.review = pb.claude_review(self.client, hands, self.calls,
+                                               self.dealer, self.vul, self.bba_compare or [])
+            except Exception:
+                self.review = None
+            self.review_ms = round((time.perf_counter() - t1) * 1000)
+        print(f"[bid-timing] finalize: BBA-compare {self.compare_ms} ms, "
+              f"Claude-review {self.review_ms} ms", flush=True)
+
+    def state(self):
+        over = pb.auction_over(self.calls)
+        to_play = None if over else pb.seat_at(self.dealer_idx, len(self.calls))
+        st = {
+            "scenario": self.scenario,
+            "board_index": self.board_index,
+            "n_boards": self.n_boards,
+            "dealer": self.dealer,
+            "vul": self.vul,
+            "south_hand": hand_to_dict(hand_of(self.deal, Player.south)),
+            "south_hcp": hand_hcp(hand_of(self.deal, Player.south)),
+            "calls": [{**m, "display": pb.call_display(m["call"])} for m in self.meta],
+            "to_play": to_play,
+            "user_to_play": to_play == "S",
+            "legal": pb.legal_calls(self.calls, self.dealer_idx) if to_play == "S" else [],
+            "complete": over,
+            "has_claude": self.client is not None,
+        }
+        if over:
+            st["contract"] = pb.final_contract(self.calls, self.dealer_idx) or "Passed out"
+            st["bba_compare"] = [{"call": c, "display": pb.call_display(c)}
+                                 for c in (self.bba_compare or [])]
+            st["review"] = self.review
+            st["all_hands"] = {s: hand_to_dict(hand_of(self.deal, LETTER_SEAT[s]))
+                               for s in ("N", "E", "S", "W")}
+            st["all_hcp"] = {s: hand_hcp(hand_of(self.deal, LETTER_SEAT[s]))
+                             for s in ("N", "E", "S", "W")}
+            st["timings"] = {
+                "review_ms": self.review_ms,
+                "compare_ms": self.compare_ms,
+                "claude_bid_ms": [m["ms"] for m in self.meta
+                                  if m.get("ms") is not None and m["engine"] == "Claude"],
+                "bba_bid_ms": [m["ms"] for m in self.meta
+                               if m.get("ms") is not None and m["engine"] != "Claude"],
+            }
+        return st
+
+
+class BidStartBody(BaseModel):
+    scenario: str
+    board_index: int | None = None
+
+
+@app.post("/api/bid/session")
+def bid_start(body: BidStartBody):
+    try:
+        sess = BidSession(body.scenario, body.board_index)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    sid = secrets.token_urlsafe(12)
+    BIDDING_SESSIONS[sid] = sess
+    return {"session_id": sid, "state": sess.state()}
+
+
+@app.get("/api/bid/session/{sid}")
+def bid_get(sid: str):
+    sess = BIDDING_SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    return {"state": sess.state()}
+
+
+class BidCallBody(BaseModel):
+    call: str
+
+
+@app.post("/api/bid/session/{sid}/call")
+def bid_call(sid: str, body: BidCallBody):
+    sess = BIDDING_SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    try:
+        sess.user_call(body.call)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return {"state": sess.state()}
+
+
+@app.post("/api/bid/session/{sid}/step")
+def bid_step(sid: str):
+    sess = BIDDING_SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    sess.step()
+    return {"state": sess.state()}
+
+
+@app.get("/bid")
+def bid_page():
+    return FileResponse(STATIC_DIR / "bid.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
