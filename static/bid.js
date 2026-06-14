@@ -17,12 +17,23 @@ let selLevel = null;   // BBO-style bid box: the level the user tapped, awaiting
 // BBA-comparison pop-up: on/off + last position, both remembered across deals.
 let compareEnabled = true;
 let comparePos = null;
+// Hand display: false = hand diagrams (suit rows), true = pictures of cards.
+let cardsMode = false;
+// Show ten as "T" (J T 9) instead of "10" (J 10 9).
+let tenAsT = false;
 try {
   const e = localStorage.getItem("bid.compareEnabled");
   if (e !== null) compareEnabled = e === "1";
   const p = localStorage.getItem("bid.comparePos");
   if (p) comparePos = JSON.parse(p);
+  const cm = localStorage.getItem("bid.cardsMode");
+  if (cm !== null) cardsMode = cm === "1";
+  const tt = localStorage.getItem("bid.tenAsT");
+  if (tt !== null) tenAsT = tt === "1";
 } catch (_) {}
+
+// Rank as shown to the user — "10" or "T" per the option.
+const showRank = (r) => (tenAsT && r === "10" ? "T" : r);
 
 const $ = (id) => document.getElementById(id);
 function el(tag, attrs = {}, ...kids) {
@@ -119,7 +130,7 @@ async function onScenario(name) {
 async function deal() {
   if (!currentScenario) return;
   showErr("");
-  $("setup-hint").hidden = true;
+  $("setup-block").hidden = true;
   $("table-wrap").hidden = false;
   showSide("coaching");           // surface the partner's thinking while we play
   setBusy("Dealing…");
@@ -176,7 +187,7 @@ function handRows(target, hand) {
   for (const suit of ["S", "H", "D", "C"]) {
     const row = el("div", { class: `hand-suit ${SUIT_CLASS[suit]}` });
     row.append(el("span", { class: "suit-symbol" }, SUIT_SYM[suit]));
-    row.append(el("span", { class: SUIT_CLASS[suit] }, (hand[suit] || []).join(" ") || "—"));
+    row.append(el("span", { class: SUIT_CLASS[suit] }, (hand[suit] || []).map(showRank).join(" ") || "—"));
     target.append(row);
   }
 }
@@ -187,11 +198,39 @@ function faceDown(slot, role) {
   slot.append(el("div", { class: "seat-name" }, role));
 }
 
-function seatHand(slot, role, hand, hcp, goldTurn) {
+// One clipped card corner: rank (bigger) over suit pip, colored via .suit-*.
+function cardEl(rank, suit) {
+  const c = el("div", { class: "pcard " + SUIT_CLASS[suit] });
+  c.append(el("span", { class: "rank" }, showRank(rank)));
+  c.append(el("span", { class: "pip" }, SUIT_SYM[suit]));
+  return c;
+}
+function cardRow(pairs) {
+  const r = el("div", { class: "pcard-row" });
+  for (const [rk, st] of pairs) r.append(cardEl(rk, st));
+  return r;
+}
+// Pictures-of-cards layout. fanned: one overlapping row of all 13 (You/Claude);
+// otherwise one row per suit (LHO/RHO) — matches BBO's "pictures of cards".
+function handCards(target, hand, fanned) {
+  target.innerHTML = "";
+  if (fanned) {
+    const pairs = [];
+    for (const s of ["S", "H", "C", "D"]) for (const rk of (hand[s] || [])) pairs.push([rk, s]);
+    target.append(pairs.length ? cardRow(pairs) : el("div", {}, "—"));
+  } else {
+    for (const s of ["S", "H", "D", "C"]) {
+      if ((hand[s] || []).length) target.append(cardRow(hand[s].map((rk) => [rk, s])));
+    }
+  }
+}
+
+function seatHand(slot, role, hand, hcp, goldTurn, fanned) {
   slot.className = "seat";
   slot.innerHTML = "";
   const wrap = el("div", { class: "hand-wrap" });
-  handRows(wrap, hand);
+  if (cardsMode) handCards(wrap, hand, fanned);
+  else handRows(wrap, hand);
   slot.append(wrap);
   slot.append(el("div", { class: "seat-name" + (goldTurn ? " your-turn" : ""),
                           html: `${role} — <span class="hcp">${hcp} HCP</span>` }));
@@ -309,10 +348,17 @@ function clampComparePopup() {
     p.style.left = x + "px"; p.style.top = y + "px";
   }
 }
-function showComparePopup() { $("compare-popup").hidden = false; positionComparePopup(); }
-function hideComparePopup() { $("compare-popup").hidden = true; }
+function showComparePopup() { $("compare-popup").hidden = false; positionComparePopup(); updateReopenBtn(); }
+function hideComparePopup() { $("compare-popup").hidden = true; updateReopenBtn(); }
 
-// The checkbox is the single source of truth for whether the pop-up shows.
+// Offer a "Show BBA comparison" button whenever the auction's done but the
+// pop-up is closed — so dismissing the dialog (✕) is never a dead end.
+function updateReopenBtn() {
+  const complete = window._lastState && window._lastState.complete;
+  $("show-compare-btn").hidden = !(complete && $("compare-popup").hidden);
+}
+
+// The checkbox is the "auto-show when the auction ends" preference (persisted).
 function setCompareEnabled(on) {
   compareEnabled = on;
   $("compare-toggle").checked = on;
@@ -321,7 +367,7 @@ function setCompareEnabled(on) {
   else hideComparePopup();
 }
 
-function makeDraggable(popup, handle) {
+function makeDraggable(popup, handle, onDrop) {
   let dragging = false, offX = 0, offY = 0;
   handle.addEventListener("mousedown", (e) => {
     if (e.target.closest(".popup-close")) return;   // ✕ isn't a drag handle
@@ -340,8 +386,7 @@ function makeDraggable(popup, handle) {
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
     dragging = false;
-    comparePos = { left: parseInt(popup.style.left), top: parseInt(popup.style.top) };
-    try { localStorage.setItem("bid.comparePos", JSON.stringify(comparePos)); } catch (_) {}
+    if (onDrop) onDrop({ left: parseInt(popup.style.left), top: parseInt(popup.style.top) });
   });
 }
 
@@ -362,8 +407,9 @@ function renderResult(state) {
   if (diff === -1) {
     note.textContent = "BBA would have bid exactly the same.";
   } else {
-    note.append("First difference: BBA bid ");
-    note.append(callNode(bba[diff]));
+    note.append("First difference: ");
+    if (bba[diff] !== undefined) { note.append("BBA bid "); note.append(callNode(bba[diff])); }
+    else note.append("BBA's auction ended sooner");
     if (actual[diff] !== undefined) {
       note.append(" where the table bid ");
       note.append(callNode(actual[diff]));
@@ -383,14 +429,55 @@ function renderResult(state) {
   if (compareEnabled) showComparePopup(); else hideComparePopup();
 }
 
+// BBO-style left column. Board badge (number + dealer "D" + vulnerability shown
+// by red edges) and the contract with E/W tricks left, N/S tricks below. Always
+// visible (unlike BBO, which hides the contract until there is one).
+// Wrap any ♠♥♦♣ glyph in its suit-color class, returning an HTML string.
+function colorSuitHtml(text) {
+  return String(text).replace(/[♠♥♦♣]/g, (g) => `<span class="${SUIT_CLASS[GLYPH_SUIT[g]]}">${g}</span>`);
+}
+
+function renderTableInfo(state) {
+  const v = (state.vul || "").toLowerCase().replace(/[^a-z]/g, "");
+  const both = v === "both" || v === "all";
+  const nsVul = both || v === "ns";
+  const ewVul = both || v === "ew";
+  const RED = "#c0392b", PALE = "#f3f3f3";
+  const nv = nsVul ? RED : PALE, ev = ewVul ? RED : PALE;
+  const dealer = (state.dealer || "N").toUpperCase();
+  const dealerOnRed = ((dealer === "N" || dealer === "S") && nsVul) ||
+                      ((dealer === "E" || dealer === "W") && ewVul);
+  $("board-badge").innerHTML =
+    `<div class="bb-diamond" style="--nv:${nv};--sv:${nv};--ev:${ev};--wv:${ev}"></div>` +
+    `<div class="bb-center">${state.board_index + 1}</div>` +
+    `<div class="bb-d ${dealer.toLowerCase()}${dealerOnRed ? " on-red" : ""}">D</div>`;
+
+  // Contract + tricks appear only once the auction has produced a contract;
+  // trick boxes are blank (no card play yet — they fill in during Phase 2).
+  const ct = $("contract-tricks");
+  if (state.complete && state.contract && state.contract !== "Passed out") {
+    const [call, decl] = state.contract.split(" by ");
+    ct.hidden = false;
+    ct.innerHTML =
+      `<div class="ct-trick ct-ew" title="E-W tricks won"></div>` +
+      `<div class="ct-contract" title="Contract">${colorSuitHtml(call)}` +
+        `<div class="ct-decl">${decl ? (ROLE[decl] || decl) : ""}</div></div>` +
+      `<div class="ct-trick ct-ns" title="N-S tricks won"></div>`;
+  } else {
+    ct.hidden = true;
+  }
+}
+
 function render(state) {
   window._lastState = state;
   $("status").hidden = true;
-  $("setup-hint").hidden = true;
+  $("setup-block").hidden = true;   // startup intro is shown only before the first deal
   $("table-wrap").hidden = false;
+  $("table-grid").classList.toggle("cards", cardsMode);   // wide fanned hands + narrow table
 
   $("meta-line").innerHTML =
     `<strong>${state.scenario.replaceAll("_", " ")}</strong> &nbsp;·&nbsp; deal ${state.board_index + 1}/${state.n_boards}`;
+  renderTableInfo(state);
 
   $("contract-display").innerHTML = "";
   if (state.complete) {
@@ -405,15 +492,15 @@ function render(state) {
 
   // Seats: reveal all four hands when the auction ends; otherwise hide the others.
   if (state.complete) {
-    seatHand($("slot-top"), ROLE.N, state.all_hands.N, state.all_hcp.N);
-    seatHand($("slot-left"), ROLE.W, state.all_hands.W, state.all_hcp.W);
-    seatHand($("slot-right"), ROLE.E, state.all_hands.E, state.all_hcp.E);
-    seatHand($("slot-bottom"), ROLE.S, state.all_hands.S, state.all_hcp.S);
+    seatHand($("slot-top"), ROLE.N, state.all_hands.N, state.all_hcp.N, false, true);
+    seatHand($("slot-left"), ROLE.W, state.all_hands.W, state.all_hcp.W, false, false);
+    seatHand($("slot-right"), ROLE.E, state.all_hands.E, state.all_hcp.E, false, false);
+    seatHand($("slot-bottom"), ROLE.S, state.all_hands.S, state.all_hcp.S, false, true);
   } else {
     faceDown($("slot-top"), ROLE.N);
     faceDown($("slot-left"), ROLE.W);
     faceDown($("slot-right"), ROLE.E);
-    seatHand($("slot-bottom"), "You", state.south_hand, state.south_hcp, state.user_to_play);
+    seatHand($("slot-bottom"), "You", state.south_hand, state.south_hcp, state.user_to_play, true);
   }
 
   const center = $("center"); center.innerHTML = "";
@@ -444,11 +531,16 @@ function openReportModal() {
   sendBtn.textContent = "Send";
   delete sendBtn.dataset.sent;
   $("report-cancel").hidden = false;
-  $("report-modal").hidden = false;
+  const p = $("report-popup");
+  if (!p.style.left) {   // first open: center-ish; afterwards reopen where left
+    p.style.left = Math.max(0, (window.innerWidth - 400) / 2) + "px";
+    p.style.top = "110px"; p.style.right = "auto";
+  }
+  p.hidden = false;
   $("report-text").focus();
 }
 
-function closeReportModal() { $("report-modal").hidden = true; }
+function closeReportModal() { $("report-popup").hidden = true; }
 
 async function sendReport() {
   if (!sessionId) return;
@@ -493,6 +585,19 @@ function setBusy(msg) {
 }
 function showErr(msg) { const e = $("page-err"); e.hidden = !msg; e.textContent = msg; }
 
+// Bounded-responsive table: scale the whole table (--k) to fill the main area,
+// leaving gutters for the Undo/Redeal and Report buttons, clamped so cards stay
+// readable on a small window and don't get cartoonish on a big one.
+function fitTable() {
+  const main = document.querySelector("main");
+  if (!main) return;
+  const avail = main.clientWidth - 240;     // ~room for the side-control gutters
+  let k = avail / 680;                       // 680px is the k=1 table footprint
+  k = Math.max(0.7, Math.min(k, 1.8));       // floor (readable) … cap (not huge)
+  document.documentElement.style.setProperty("--k", k.toFixed(3));
+}
+window.addEventListener("resize", fitTable);
+
 $("tab-scenario").onclick = () => showSide("scenario");
 $("tab-coaching").onclick = () => showSide("coaching");
 $("redeal").onclick = deal;
@@ -500,15 +605,40 @@ $("undo-btn").onclick = undo;
 $("report-btn").onclick = openReportModal;
 $("report-cancel").onclick = closeReportModal;
 $("report-send").onclick = sendReport;
-$("report-modal").addEventListener("click", (ev) => {
-  if (ev.target.id === "report-modal") closeReportModal();  // click backdrop to close
-});
+$("report-popup-close").onclick = closeReportModal;
+makeDraggable($("report-popup"), $("report-popup-bar"));   // drag (resize via CSS)
 $("search-input").addEventListener("input", (ev) => applyMenuFilter(ev.target.value));
 
 // BBA-comparison pop-up wiring.
+// ---- Options modal ----
+$("options-btn").onclick = () => { $("settings-modal").hidden = false; };
+$("settings-close").onclick = () => { $("settings-modal").hidden = true; };
+$("settings-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "settings-modal") $("settings-modal").hidden = true;   // backdrop closes
+});
+
+$("cards-toggle").checked = cardsMode;
+$("cards-toggle").onchange = (ev) => {
+  cardsMode = ev.target.checked;
+  try { localStorage.setItem("bid.cardsMode", cardsMode ? "1" : "0"); } catch (_) {}
+  if (window._lastState) render(window._lastState);   // redraw the current deal in the new mode
+};
+
+$("ten-toggle").checked = tenAsT;
+$("ten-toggle").onchange = (ev) => {
+  tenAsT = ev.target.checked;
+  try { localStorage.setItem("bid.tenAsT", tenAsT ? "1" : "0"); } catch (_) {}
+  if (window._lastState) render(window._lastState);
+};
+
 $("compare-toggle").checked = compareEnabled;
 $("compare-toggle").onchange = (ev) => setCompareEnabled(ev.target.checked);
-$("compare-popup-close").onclick = () => setCompareEnabled(false);
-makeDraggable($("compare-popup"), $("compare-popup-bar"));
+$("compare-popup-close").onclick = hideComparePopup;   // dismiss for now; reopen below
+$("show-compare-btn").onclick = showComparePopup;
+makeDraggable($("compare-popup"), $("compare-popup-bar"), (pos) => {
+  comparePos = pos;
+  try { localStorage.setItem("bid.comparePos", JSON.stringify(pos)); } catch (_) {}
+});
 
+fitTable();
 loadMenu().catch((e) => showErr("Couldn't load scenarios: " + e.message));
