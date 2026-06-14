@@ -300,6 +300,48 @@ function render(state) {
   else { $("result").hidden = true; renderBidbox(state); }
 }
 
+// ---- report a problem ----
+// The note is all the user supplies; the server reads scenario/deal/auction
+// from the live session and files a GitHub issue (labelled "user-feedback").
+
+function openReportModal() {
+  if (!sessionId) return;
+  const sendBtn = $("report-send");
+  $("report-text").value = "";
+  $("report-status").textContent = "";
+  sendBtn.disabled = false;
+  sendBtn.textContent = "Send";
+  delete sendBtn.dataset.sent;
+  $("report-cancel").hidden = false;
+  $("report-modal").hidden = false;
+  $("report-text").focus();
+}
+
+function closeReportModal() { $("report-modal").hidden = true; }
+
+async function sendReport() {
+  if (!sessionId) return;
+  const sendBtn = $("report-send");
+  // After a successful send the button reads "Close" and just dismisses the dialog.
+  if (sendBtn.dataset.sent) { closeReportModal(); return; }
+  const note = ($("report-text").value || "").trim();
+  const statusEl = $("report-status");
+  if (!note) { statusEl.textContent = "Please describe what looks wrong."; return; }
+  sendBtn.disabled = true;
+  statusEl.textContent = "Sending…";
+  try {
+    await api("POST", `/api/bid/session/${sessionId}/report`, { note });
+    statusEl.textContent = "Thanks — your report was sent.";
+    sendBtn.textContent = "Close";
+    sendBtn.dataset.sent = "1";
+    $("report-cancel").hidden = true;
+  } catch (e) {
+    statusEl.textContent = "Couldn't send — " + e.message;
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
 function setBusy(msg) {
   $("bidbox").hidden = true;
   $("status").hidden = false;
@@ -310,5 +352,11 @@ function showErr(msg) { const e = $("page-err"); e.hidden = !msg; e.textContent 
 $("tab-scenario").onclick = () => showSide("scenario");
 $("tab-coaching").onclick = () => showSide("coaching");
 $("redeal").onclick = deal;
+$("report-btn").onclick = openReportModal;
+$("report-cancel").onclick = closeReportModal;
+$("report-send").onclick = sendReport;
+$("report-modal").addEventListener("click", (ev) => {
+  if (ev.target.id === "report-modal") closeReportModal();  // click backdrop to close
+});
 $("search-input").addEventListener("input", (ev) => applyMenuFilter(ev.target.value));
 loadMenu().catch((e) => showErr("Couldn't load scenarios: " + e.message));

@@ -277,39 +277,57 @@ def claude_next_call(client, hand, calls: list[str], dealer_letter: str,
     }
     resp = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=2000,
+        # Headroom for adaptive thinking + the JSON answer. At 2000, deep
+        # thinking could exhaust the budget (stop_reason "max_tokens"), leaving
+        # the response with no text block — the extraction below then raised
+        # StopIteration and 500'd the /step request mid-auction.
+        max_tokens=8000,
         thinking={"type": "adaptive"},
         output_config={"format": {"type": "json_schema", "schema": schema}},
         system=CLAUDE_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
     import json
-    text = next(b.text for b in resp.content if b.type == "text")
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    if not text:
+        raise RuntimeError(f"Claude returned no call (stop_reason={resp.stop_reason})")
     data = json.loads(text)
     return data["call"], data.get("reason", "")
 
 
-def claude_review(client, hands_by_seat: dict[str, str], calls: list[str],
+def claude_review(client, hands_by_seat: dict, calls: list[str],
                   dealer_letter: str, vul_str: str, bba_calls: list[str]) -> str:
-    """A short post-auction review from North's (partner's) perspective."""
+    """A short post-auction review from North's (partner's) perspective.
+
+    hands_by_seat maps 'N'/'E'/'S'/'W' to hand objects. HCP and distribution
+    are computed here and handed to Claude alongside the cards, so it never
+    counts points or honors by eye — it was getting both wrong (e.g. calling a
+    16-count "balanced 18", or "two top diamonds" with AKQ)."""
     dealer_idx = SEATS.index(dealer_letter)
 
     def labeled(cs):
         return ("\n".join(f"  {seat_at(dealer_idx, i)}: {call_display(c)}"
                           for i, c in enumerate(cs)) or "  (passed out)")
 
-    hands = "\n".join(f"{s}:\n{hands_by_seat[s]}" for s in ("N", "E", "S", "W"))
+    def hand_block(s):
+        hcp, shape = hand_hcp_shape(hands_by_seat[s])
+        return f"{s} — {hcp} HCP, distribution {shape}:\n{hand_lines(hands_by_seat[s])}"
+
+    hands = "\n".join(hand_block(s) for s in ("N", "E", "S", "W"))
     prompt = (
         f"The hand is over. Dealer {dealer_letter}, vulnerability {vul_str}. "
         "You sat NORTH; your partner was SOUTH; East/West were robot opponents.\n\n"
-        f"All four hands:\n{hands}\n\n"
+        f"All four hands — the HCP and distribution for each are computed for you; "
+        f"use those figures and do not recount:\n{hands}\n\n"
         f"Our auction (each line is 'seat: call' — your calls are the N lines, "
         f"partner's are the S lines):\n{labeled(calls)}\n"
         f"Final contract: {final_contract(calls, dealer_idx) or 'Passed out'}\n\n"
         f"For comparison, a bidding engine (BBA) bid this same layout:\n{labeled(bba_calls)}\n\n"
         "Give a SHORT review (2-4 sentences) for your partner South: how did our "
         "auction go, is the final contract sound, and one concrete takeaway. Be "
-        "accurate about who bid what. Warm, specific, encouraging. Plain text, no markdown."
+        "accurate about who bid what, and precise about high cards — rely on the HCP "
+        "and distribution given above, and when you mention honors read each suit's "
+        "exact cards rather than estimating. Warm, specific, encouraging. Plain text, no markdown."
     )
     # No extended thinking here: it's a short summary, and adaptive thinking can
     # eat the whole budget and truncate (or empty out) the visible review.

@@ -23,9 +23,10 @@
   .meta-line { font-size: 1.05rem; margin: 0.25rem 0 0.6rem; text-align: center; }
   .meta-line strong { font-weight: 700; }
 
-  /* Table centered in the main area; Redeal pinned far-left, bottom-aligned to the table. */
+  /* Table centered in the main area; Redeal pinned far-left, Report far-right, bottom-aligned. */
   .table-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 1rem; }
   #redeal { justify-self: start; align-self: end; }
+  #report-btn { justify-self: end; align-self: end; }
   #table-grid { width: 560px; grid-template-columns: 1fr 1.5fr 1fr; }
 
   /* Seats: name plate at the BOTTOM; hand centered as a block, cards left-aligned. */
@@ -114,6 +115,7 @@
             <div id="slot-bottom" class="seat"></div>
           </div>
         </div>
+        <button id="report-btn" title="Report a problem with this deal or the bidding">🚩 Report</button>
       </div>
 
       <div class="card" id="bidbox" hidden>
@@ -137,6 +139,21 @@
       <div id="page-err" class="err" hidden></div>
     </div>
   </main>
+</div>
+
+<div id="report-modal" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Report a problem</h2>
+    <p class="muted">Tell us what looks wrong on this deal or in the bidding — your
+      note is sent along with the scenario, deal, and auction so it can be tracked down.</p>
+    <textarea id="report-text" rows="5" placeholder="What looks wrong here?"
+      style="width:100%;box-sizing:border-box"></textarea>
+    <div id="report-status" class="muted"></div>
+    <div class="modal-actions">
+      <button id="report-cancel">Cancel</button>
+      <button id="report-send" class="primary">Send</button>
+    </div>
+  </div>
 </div>
 
 <script src="/static/bid.js"></script>

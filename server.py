@@ -1536,18 +1536,16 @@ def _build_issue(sess, note: str):
     return title, body
 
 
-@app.post("/api/session/{sid}/report")
-async def report_feedback(sid: str, body: ReportBody):
-    sess = SESSIONS.get(sid)
-    if sess is None:
-        raise HTTPException(404, "session not found")
+async def _file_issue(title: str, issue_body: str) -> str | None:
+    """File a GitHub issue (token check, rate limit, label, POST). Returns the
+    new issue's html_url, or raises HTTPException with a user-readable message.
+    Shared by the play trainer and the bidding page."""
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         # Feature isn't wired up yet — say so plainly rather than a 500.
         raise HTTPException(503, "Feedback isn't configured yet (GITHUB_TOKEN is unset).")
     if _rate_limited():
         raise HTTPException(429, "Thanks — lots of reports have just come in. Please try again in a little while.")
-    title, issue_body = _build_issue(sess, body.note)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -1571,7 +1569,17 @@ async def report_feedback(sid: str, body: ReportBody):
         raise HTTPException(502, f"Couldn't reach GitHub: {e}")
     if resp.status_code >= 300:
         raise HTTPException(502, f"GitHub rejected the report ({resp.status_code}): {resp.text[:300]}")
-    return {"ok": True, "issue_url": resp.json().get("html_url")}
+    return resp.json().get("html_url")
+
+
+@app.post("/api/session/{sid}/report")
+async def report_feedback(sid: str, body: ReportBody):
+    sess = SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    title, issue_body = _build_issue(sess, body.note)
+    url = await _file_issue(title, issue_body)
+    return {"ok": True, "issue_url": url}
 
 
 # ---------- static files ----------
@@ -1641,9 +1649,16 @@ class BidSession:
         t0 = time.perf_counter()
         if seat == "N" and self.client is not None:
             legal = pb.legal_calls(self.calls, self.dealer_idx)
-            call, reason = pb.claude_next_call(self.client, self.deal.north,
-                                               self.calls, self.dealer, self.vul, legal)
-            self._record("N", call, "Claude", reason)
+            try:
+                call, reason = pb.claude_next_call(self.client, self.deal.north,
+                                                   self.calls, self.dealer, self.vul, legal)
+                self._record("N", call, "Claude", reason)
+            except Exception as e:
+                # A transient Claude/API hiccup shouldn't dead-end the auction —
+                # fall back to the BBA engine for this one call so bidding finishes.
+                print(f"[bid] Claude call failed ({e!r}); falling back to BBA", flush=True)
+                call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
+                self._record("N", call, "Claude (BBA fallback — Claude unavailable)", "")
         else:
             call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
             engine = "Claude (BBA stub — no API key)" if seat == "N" else "Robot (BBA)"
@@ -1678,7 +1693,7 @@ class BidSession:
         if self.client is not None:
             t1 = time.perf_counter()
             try:
-                hands = {s: pb.hand_lines(hand_of(self.deal, LETTER_SEAT[s]))
+                hands = {s: hand_of(self.deal, LETTER_SEAT[s])
                          for s in ("N", "E", "S", "W")}
                 self.review = pb.claude_review(self.client, hands, self.calls,
                                                self.dealer, self.vul, self.bba_compare or [])
@@ -1773,8 +1788,53 @@ def bid_step(sid: str):
     sess = BIDDING_SESSIONS.get(sid)
     if sess is None:
         raise HTTPException(404, "session not found")
-    sess.step()
+    try:
+        sess.step()
+    except Exception as e:
+        # Surface a readable message instead of a bare 500 "Internal Server Error".
+        raise HTTPException(502, f"Bidding engine error: {e}")
     return {"state": sess.state()}
+
+
+def _build_bid_issue(sess: "BidSession", note: str):
+    """Compose a GitHub issue (title, body) from a bidding-with-Claude session.
+    Real-compass frame (N E S W) so the deal matches the source PBN."""
+    scenario = sess.scenario
+    deal_no = sess.board_index + 1
+    auction = " ".join(sess.calls) or "(none)"
+    over = pb.auction_over(sess.calls)
+    if over:
+        contract = pb.final_contract(sess.calls, sess.dealer_idx) or "Passed out"
+        phase = "auction complete"
+    else:
+        contract = "(bidding in progress)"
+        seat = pb.seat_at(sess.dealer_idx, len(sess.calls))
+        phase = f"bidding — {seat} to call"
+    order = (Player.north, Player.east, Player.south, Player.west)
+    deal_pbn = " ".join(f"{SEAT_LETTER[p]}:{hand_of(sess.deal, p)}" for p in order)
+    note_clean = _sanitize_note(note)
+    title = f"Feedback (bidding): {scenario} · Deal {deal_no}"
+    body = (
+        f"**User says:** {note_clean}\n\n"
+        f"---\n"
+        f"*auto-captured (bidding-with-Claude page):*\n"
+        f"- Scenario: **{scenario}** · Deal: **{deal_no}**\n"
+        f"- Dealer: {sess.dealer} · Vul: {sess.vul} · {phase}\n"
+        f"- Contract: {contract}\n"
+        f"- Auction: {auction}\n"
+        f"- Deal (PBN): `{deal_pbn}`\n"
+    )
+    return title, body
+
+
+@app.post("/api/bid/session/{sid}/report")
+async def bid_report(sid: str, body: ReportBody):
+    sess = BIDDING_SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    title, issue_body = _build_bid_issue(sess, body.note)
+    url = await _file_issue(title, issue_body)
+    return {"ok": True, "issue_url": url}
 
 
 @app.get("/bid")
