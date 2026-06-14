@@ -1629,6 +1629,7 @@ class BidSession:
         self._finalized = False
         self.compare_ms = None      # timing instrumentation (what's fast vs slow)
         self.review_ms = None
+        self.dd = None              # double-dummy table, computed once at auction end
         # No auto-advance: the client drives one seat at a time via /step so
         # each robot/Claude call is revealed as it's made, not in a batch.
 
@@ -1680,6 +1681,27 @@ class BidSession:
         if pb.auction_over(self.calls):   # your pass/bid can itself end the auction
             self._finalize()
 
+    def undo(self):
+        """Revert the user's last call and every call after it (the robots'/
+        Claude's responses, plus any auction-end), so it's the user's turn
+        again. No-op if the user hasn't bid yet."""
+        last_s = None
+        for i, m in enumerate(self.meta):
+            if m["seat"] == "S":
+                last_s = i
+        if last_s is None:
+            return
+        del self.calls[last_s:]
+        del self.meta[last_s:]
+        # The auction is no longer over — drop the finalize artifacts so a
+        # re-finished auction recomputes them fresh.
+        self._finalized = False
+        self.review = None
+        self.bba_compare = None
+        self.compare_ms = None
+        self.review_ms = None
+        self.dd = None
+
     def _finalize(self):
         if self._finalized:
             return
@@ -1700,6 +1722,20 @@ class BidSession:
             except Exception:
                 self.review = None
             self.review_ms = round((time.perf_counter() - t1) * 1000)
+        # Double-dummy table for the result panel: tricks each declarer (N S E W)
+        # can take in each strain (C D H S NT), with the best result flagged.
+        try:
+            table = calc_dd_table(self.deal)
+            denoms = [Denom.clubs, Denom.diamonds, Denom.hearts, Denom.spades, Denom.nt]
+            rows, mx = [], 0
+            for p in (Player.north, Player.south, Player.east, Player.west):
+                tricks = [int(table[d, p]) for d in denoms]
+                mx = max(mx, max(tricks))
+                rows.append({"seat": SEAT_LETTER[p], "tricks": tricks})
+            self.dd = {"strains": ["C", "D", "H", "S", "NT"], "rows": rows, "max": mx}
+        except Exception as e:
+            print(f"[bid] DD-table failed: {e!r}", flush=True)
+            self.dd = None
         print(f"[bid-timing] finalize: BBA-compare {self.compare_ms} ms, "
               f"Claude-review {self.review_ms} ms", flush=True)
 
@@ -1717,6 +1753,7 @@ class BidSession:
             "calls": [{**m, "display": pb.call_display(m["call"])} for m in self.meta],
             "to_play": to_play,
             "user_to_play": to_play == "S",
+            "can_undo": any(m["seat"] == "S" for m in self.meta),
             "legal": pb.legal_calls(self.calls, self.dealer_idx) if to_play == "S" else [],
             "complete": over,
             "has_claude": self.client is not None,
@@ -1726,6 +1763,7 @@ class BidSession:
             st["bba_compare"] = [{"call": c, "display": pb.call_display(c)}
                                  for c in (self.bba_compare or [])]
             st["review"] = self.review
+            st["dd"] = self.dd
             st["all_hands"] = {s: hand_to_dict(hand_of(self.deal, LETTER_SEAT[s]))
                                for s in ("N", "E", "S", "W")}
             st["all_hcp"] = {s: hand_hcp(hand_of(self.deal, LETTER_SEAT[s]))
@@ -1793,6 +1831,15 @@ def bid_step(sid: str):
     except Exception as e:
         # Surface a readable message instead of a bare 500 "Internal Server Error".
         raise HTTPException(502, f"Bidding engine error: {e}")
+    return {"state": sess.state()}
+
+
+@app.post("/api/bid/session/{sid}/undo")
+def bid_undo(sid: str):
+    sess = BIDDING_SESSIONS.get(sid)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    sess.undo()
     return {"state": sess.state()}
 
 

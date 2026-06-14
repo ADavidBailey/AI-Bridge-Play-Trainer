@@ -14,6 +14,15 @@ const SEAT_NAME = { N: "Claude", E: "RHO", W: "LHO" };
 let currentScenario = null;
 let sessionId = null;
 let selLevel = null;   // BBO-style bid box: the level the user tapped, awaiting a strain
+// BBA-comparison pop-up: on/off + last position, both remembered across deals.
+let compareEnabled = true;
+let comparePos = null;
+try {
+  const e = localStorage.getItem("bid.compareEnabled");
+  if (e !== null) compareEnabled = e === "1";
+  const p = localStorage.getItem("bid.comparePos");
+  if (p) comparePos = JSON.parse(p);
+} catch (_) {}
 
 const $ = (id) => document.getElementById(id);
 function el(tag, attrs = {}, ...kids) {
@@ -147,12 +156,15 @@ async function runSteps() {
 
 // ---- rendering ----
 
-function buildAuction(container, calls, dealer, toPlay, markLast) {
+function buildAuction(container, calls, dealer, toPlay, markLast, diffIndex = -1) {
   container.innerHTML = "";
   for (const s of SEATS) container.append(el("div", { class: "head" }, ROLE[s]));
   for (let i = 0; i < SEATS.indexOf(dealer); i++) container.append(el("div", { class: "cell" }));
   calls.forEach((c, i) => {
-    const cell = el("div", { class: "cell" + (markLast && i === calls.length - 1 ? " new" : "") });
+    let cls = "cell";
+    if (markLast && i === calls.length - 1) cls += " new";
+    if (i === diffIndex) cls += " diff";
+    const cell = el("div", { class: cls });
     cell.append(callNode(c.call));
     container.append(cell);
   });
@@ -219,6 +231,15 @@ function renderBidbox(state) {
   }
 }
 
+const GLYPH_SUIT = { "♠": "S", "♥": "H", "♦": "D", "♣": "C" };
+// Append `text` to `node`, wrapping any ♠♥♦♣ glyph in its suit color.
+function appendColoredSuits(node, text) {
+  for (const part of String(text).split(/([♠♥♦♣])/)) {
+    if (GLYPH_SUIT[part]) node.append(el("span", { class: SUIT_CLASS[GLYPH_SUIT[part]] }, part));
+    else if (part) node.append(part);
+  }
+}
+
 function renderChat(state) {
   const chat = $("chat");
   chat.innerHTML = "";
@@ -231,29 +252,135 @@ function renderChat(state) {
     const m = el("div", { class: "chat-msg" });
     m.append(el("span", { class: "who" }, "Claude"));
     m.append("Bid "); m.append(callNode(c.call));
-    m.append(" — " + c.reason + (c.ms ? ` (${(c.ms / 1000).toFixed(1)}s)` : ""));
+    m.append(" — ");
+    appendColoredSuits(m, c.reason);
+    if (c.ms) m.append(` (${(c.ms / 1000).toFixed(1)}s)`);
     chat.append(m);
   }
   if (state.complete && state.review) {
     const m = el("div", { class: "chat-msg" });
     m.append(el("span", { class: "who" }, "Claude · review"));
-    m.append(state.review);
+    appendColoredSuits(m, state.review);
     chat.append(m);
   }
   chat.scrollTop = chat.scrollHeight;
 }
 
+// Render the double-dummy grid: tricks each declarer (rows) makes per strain
+// (cols), with the best result on the board flagged green.
+function renderDDTable(dd) {
+  const tbl = $("dd-table");
+  tbl.innerHTML = "";
+  if (!dd) { tbl.hidden = true; return; }
+  tbl.hidden = false;
+  const head = el("tr");
+  head.append(el("th", {}, ""));
+  for (const s of dd.strains) {
+    head.append(el("th", {}, s === "NT" ? el("span", {}, "NT")
+                                        : el("span", { class: SUIT_CLASS[s] }, SUIT_SYM[s])));
+  }
+  tbl.append(head);
+  for (const row of dd.rows) {
+    const tr = el("tr");
+    tr.append(el("th", {}, ROLE[row.seat]));
+    for (const n of row.tricks) {
+      tr.append(el("td", { class: n === dd.max ? "best" : "" }, String(n)));
+    }
+    tbl.append(tr);
+  }
+}
+
+// ---- BBA-comparison pop-up (draggable, toggle-able) ----
+
+function positionComparePopup() {
+  const p = $("compare-popup");
+  if (comparePos) {
+    p.style.left = comparePos.left + "px"; p.style.top = comparePos.top + "px"; p.style.right = "auto";
+    clampComparePopup();
+  } else {                       // default: upper-right, clear of the table
+    p.style.left = "auto"; p.style.right = "1.2rem"; p.style.top = "5rem";
+  }
+}
+function clampComparePopup() {
+  const p = $("compare-popup");
+  if (p.style.left && p.style.left !== "auto") {
+    const x = Math.max(0, Math.min(parseInt(p.style.left), window.innerWidth - p.offsetWidth));
+    const y = Math.max(0, Math.min(parseInt(p.style.top), window.innerHeight - p.offsetHeight));
+    p.style.left = x + "px"; p.style.top = y + "px";
+  }
+}
+function showComparePopup() { $("compare-popup").hidden = false; positionComparePopup(); }
+function hideComparePopup() { $("compare-popup").hidden = true; }
+
+// The checkbox is the single source of truth for whether the pop-up shows.
+function setCompareEnabled(on) {
+  compareEnabled = on;
+  $("compare-toggle").checked = on;
+  try { localStorage.setItem("bid.compareEnabled", on ? "1" : "0"); } catch (_) {}
+  if (on && window._lastState && window._lastState.complete) showComparePopup();
+  else hideComparePopup();
+}
+
+function makeDraggable(popup, handle) {
+  let dragging = false, offX = 0, offY = 0;
+  handle.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".popup-close")) return;   // ✕ isn't a drag handle
+    dragging = true;
+    const r = popup.getBoundingClientRect();
+    offX = e.clientX - r.left; offY = e.clientY - r.top;
+    popup.style.left = r.left + "px"; popup.style.top = r.top + "px"; popup.style.right = "auto";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const x = Math.max(0, Math.min(e.clientX - offX, window.innerWidth - popup.offsetWidth));
+    const y = Math.max(0, Math.min(e.clientY - offY, window.innerHeight - popup.offsetHeight));
+    popup.style.left = x + "px"; popup.style.top = y + "px";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    comparePos = { left: parseInt(popup.style.left), top: parseInt(popup.style.top) };
+    try { localStorage.setItem("bid.comparePos", JSON.stringify(comparePos)); } catch (_) {}
+  });
+}
+
 function renderResult(state) {
-  $("result").hidden = false;
-  $("contract-line").textContent = "Final contract: " + state.contract;
-  buildAuction($("auc-ours"), state.calls, state.dealer, null);
-  buildAuction($("auc-bba"), state.bba_compare, state.dealer, null);
+  // Populate the pop-up's contents; it's shown only if the toggle is on.
+  // Show only BBA's auction, flagging the first call where it diverges from
+  // the table's actual auction (which is already on the board above).
+  const actual = state.calls.map((c) => c.call);
+  const bba = state.bba_compare.map((c) => c.call);
+  let diff = -1;
+  for (let i = 0; i < Math.max(actual.length, bba.length); i++) {
+    if (actual[i] !== bba[i]) { diff = i; break; }
+  }
+  buildAuction($("auc-bba"), state.bba_compare, state.dealer, null, false, diff);
+
+  const note = $("compare-note");
+  note.innerHTML = "";
+  if (diff === -1) {
+    note.textContent = "BBA would have bid exactly the same.";
+  } else {
+    note.append("First difference: BBA bid ");
+    note.append(callNode(bba[diff]));
+    if (actual[diff] !== undefined) {
+      note.append(" where the table bid ");
+      note.append(callNode(actual[diff]));
+    }
+    note.append(".");
+  }
+
+  renderDDTable(state.dd);
+
   const t = state.timings || {};
   const secs = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
   const list = (a) => (a && a.length ? a.map(secs).join(", ") : "—");
   $("timing").textContent =
     `Timing — Claude bids: ${list(t.claude_bid_ms)} · robot bids: ${list(t.bba_bid_ms)}`
     + ` · BBA compare: ${secs(t.compare_ms)} · Claude review: ${secs(t.review_ms)}`;
+
+  if (compareEnabled) showComparePopup(); else hideComparePopup();
 }
 
 function render(state) {
@@ -296,8 +423,12 @@ function render(state) {
 
   renderChat(state);
 
+  // Undo is offered only when it's safe to take back: the user has bid, and
+  // we're not mid-auto-step (their turn, or the auction's finished).
+  $("undo-btn").disabled = !(state.can_undo && (state.user_to_play || state.complete));
+
   if (state.complete) { $("bidbox").hidden = true; renderResult(state); }
-  else { $("result").hidden = true; renderBidbox(state); }
+  else { hideComparePopup(); renderBidbox(state); }
 }
 
 // ---- report a problem ----
@@ -342,16 +473,30 @@ async function sendReport() {
   }
 }
 
+// Take back the user's last call and everything the robots/Claude did after
+// it. The server returns the user-to-play state, so there are no steps to run.
+async function undo() {
+  if (!sessionId) return;
+  showErr("");
+  $("undo-btn").disabled = true;
+  try {
+    const data = await api("POST", `/api/bid/session/${sessionId}/undo`);
+    render(data.state);
+  } catch (e) { showErr("Couldn't undo: " + e.message); }
+}
+
 function setBusy(msg) {
   $("bidbox").hidden = true;
   $("status").hidden = false;
   $("status-text").textContent = msg;
+  $("undo-btn").disabled = true;   // no undo while robots/Claude are bidding
 }
 function showErr(msg) { const e = $("page-err"); e.hidden = !msg; e.textContent = msg; }
 
 $("tab-scenario").onclick = () => showSide("scenario");
 $("tab-coaching").onclick = () => showSide("coaching");
 $("redeal").onclick = deal;
+$("undo-btn").onclick = undo;
 $("report-btn").onclick = openReportModal;
 $("report-cancel").onclick = closeReportModal;
 $("report-send").onclick = sendReport;
@@ -359,4 +504,11 @@ $("report-modal").addEventListener("click", (ev) => {
   if (ev.target.id === "report-modal") closeReportModal();  // click backdrop to close
 });
 $("search-input").addEventListener("input", (ev) => applyMenuFilter(ev.target.value));
+
+// BBA-comparison pop-up wiring.
+$("compare-toggle").checked = compareEnabled;
+$("compare-toggle").onchange = (ev) => setCompareEnabled(ev.target.checked);
+$("compare-popup-close").onclick = () => setCompareEnabled(false);
+makeDraggable($("compare-popup"), $("compare-popup-bar"));
+
 loadMenu().catch((e) => showErr("Couldn't load scenarios: " + e.message));
