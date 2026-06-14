@@ -220,8 +220,18 @@ CLAUDE_SYSTEM = (
     "(Standard American style: 5-card majors, strong 1NT 15-17, standard "
     "responses and rebids). You see only your own 13 cards and the auction so "
     "far — never any hidden hand. Choose the single best call for North now. "
-    "Bid soundly and in partnership style; do not invent a system. Return only "
-    "the structured result."
+    "Bid soundly and in partnership style; do not invent a system. "
+    "Respect partner's preempts: do not introduce a new suit over partner's weak "
+    "two without a strong hand and a fit — with a weak hand and no fit, pass. "
+    "Use bridge terms accurately: a weak two-bid shows a GOOD six-card suit and a "
+    "weak hand (not a 'weak suit'), and such hands often lack outside entries. "
+    "IMPORTANT — your one-sentence 'reason' is shown live to your partner (a "
+    "student) during the auction, while your hand is hidden from them. Explain "
+    "only what your call SHOWS or ASKS in standard 2/1 terms — the message "
+    "partner should read from the bid. Do NOT name your specific cards or honors, "
+    "and reveal no more strength or shape than the call itself promises; partner "
+    "must reason from the bid's meaning, not see your hand. "
+    "Return only the structured result."
 )
 
 
@@ -270,7 +280,10 @@ def claude_next_call(client, hand, calls: list[str], dealer_letter: str,
         "properties": {
             "call": {"type": "string", "enum": legal,
                      "description": "Your call in PBN form, e.g. 1C, 2D, 3NT, X, XX, Pass."},
-            "reason": {"type": "string", "description": "One sentence of bridge reasoning."},
+            "reason": {"type": "string", "description": "One short sentence: what this "
+                       "call shows or asks partner in standard 2/1 terms (its meaning) — "
+                       "no specific cards, honors, or exact strength, since partner cannot "
+                       "see your hand during the auction."},
         },
         "required": ["call", "reason"],
         "additionalProperties": False,
