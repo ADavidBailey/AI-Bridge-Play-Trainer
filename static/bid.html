@@ -121,7 +121,8 @@
   .bidbtn { min-width: 2.6em; font-size: 1.3rem; font-weight: 700; padding: 0.35rem 0.55rem;
             border: 1px solid var(--rule); border-radius: 7px; background: #fff; cursor: pointer; }
   .bidbtn:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
-  .bidbtn:disabled { opacity: 0.25; cursor: default; }
+  /* full color, just not clickable (override the browser's gray-out for disabled) */
+  .bidbtn:disabled { cursor: default; opacity: 1; color: var(--ink); }
   .bidbtn.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
   .bidbtn .suit-spade, .bidbtn .suit-heart, .bidbtn .suit-diamond, .bidbtn .suit-club {
     font-size: 1.9em; font-weight: 900; }

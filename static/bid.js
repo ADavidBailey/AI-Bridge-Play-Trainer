@@ -3,7 +3,7 @@
 // auction in the center. Calls reveal one at a time via /step.
 "use strict";
 
-const SEATS = ["N", "E", "S", "W"];
+const SEATS = ["W", "N", "E", "S"];   // auction columns: LHO · Claude · RHO · You (W-N-E-S, clockwise)
 const STRAINS = ["C", "D", "H", "S", "NT"];
 const SUIT_SYM = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_CLASS = { S: "suit-spade", H: "suit-heart", D: "suit-diamond", C: "suit-club" };
