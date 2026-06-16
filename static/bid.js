@@ -24,6 +24,12 @@ let tenAsT = false;
 // Which scenario's authored chat has been seeded into #table-chat (so we seed
 // once per scenario, not on every re-render or same-scenario Redeal).
 let chatScenario = null;
+
+// Design scale for the table — the single "zoom knob" for the whole /bid UI.
+// fitTable() renders at exactly this scale on any window wide enough to fit it,
+// and only shrinks below it (down to the 0.7 floor) on windows too narrow.
+// Raise it (1.2, 1.3, …) to scale the entire table up uniformly.
+const K_DESIGN = 1.0;
 try {
   const e = localStorage.getItem("bid.compareEnabled");
   if (e !== null) compareEnabled = e === "1";
@@ -605,7 +611,7 @@ function fitTable() {
   if (!main) return;
   const avail = main.clientWidth - 240;     // ~room for the side-control gutters
   let k = avail / 680;                       // 680px is the k=1 table footprint
-  k = Math.max(0.7, Math.min(k, 1.8));       // floor (readable) … cap (not huge)
+  k = Math.max(0.7, Math.min(k, K_DESIGN));  // floor (readable) … cap at the design scale
   document.documentElement.style.setProperty("--k", k.toFixed(3));
 }
 window.addEventListener("resize", fitTable);
