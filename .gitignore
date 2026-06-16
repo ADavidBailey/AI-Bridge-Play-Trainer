@@ -8,3 +8,4 @@ venv/
 
 # Runtime-generated
 activity-log.json
+.claude/
