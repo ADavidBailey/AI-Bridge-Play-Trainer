@@ -37,25 +37,28 @@
   #setup-hint { font-size: 1.9rem; font-weight: 700; color: var(--accent); }
   .setup-arrow { font-size: 2.3rem; vertical-align: -0.15em; margin-left: 0.3rem; }
 
-  /* Table centered in the main area; full-height left column (BBO-style). */
-  .table-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 1rem; }
-  /* Left column runs the full height of the viewport. Its top block is pinned to
-     the top and the bottom block (Redeal/Undo/Report) to the bottom, so the Undo
-     button stays in exactly the same place no matter how the deal changes. */
-  .left-controls { justify-self: start; align-self: start; width: 120px;
-                   height: calc(100vh - 150px);
-                   display: flex; flex-direction: column; justify-content: space-between; gap: 1.2rem; }
-  .lc-top { display: flex; flex-direction: column; align-items: center; gap: 1.1rem; }
-  .lc-bottom { display: flex; flex-direction: column; gap: 0.6rem; }
+  /* Two-row interleaved grid so the left column lines up row-for-row with the
+     table stack:  row 1 = lc-top | table ;  row 2 = lc-bottom | bid box + chat.
+     Row 2 is 1fr, so the left column runs the full height of the viewport while
+     Redeal/Undo stay vertically aligned with the bidding selector below the
+     table — and Undo's position is fixed to the (fixed-size) table, so it never
+     jumps as the deal changes. */
+  .table-row { display: grid; grid-template-columns: 1fr auto 1fr;
+               grid-template-rows: auto 1fr; align-items: start;
+               column-gap: 1rem; row-gap: 0.8rem; min-height: calc(100vh - 150px); }
+  /* The wrapper dissolves so lc-top / lc-bottom become grid items themselves. */
+  .left-controls { display: contents; }
+  .lc-top    { grid-column: 1; grid-row: 1; justify-self: end; width: 120px;
+               display: flex; flex-direction: column; align-items: center; gap: 1.1rem; }
+  .lc-bottom { grid-column: 1; grid-row: 2; justify-self: end; align-self: start; width: 120px;
+               display: flex; flex-direction: column; gap: 0.6rem; }
+  #table-panel { grid-column: 2; grid-row: 1; }
+  .below-stack { grid-column: 2; grid-row: 2; align-self: start;
+                 display: flex; flex-direction: column; gap: 0.8rem; }
   /* Compact left-column buttons — they rarely change, so users learn them and
      they don't need to be large. */
   .left-controls button { width: 100%; font-size: 0.85rem; padding: 0.32rem 0.4rem; }
-
-  /* Everything under the table is a single vertical stack at the table's width:
-     table on top, then the bid box, then the table chat. */
-  .table-stack { display: flex; flex-direction: column; align-items: stretch;
-                 gap: 0.8rem; width: fit-content; }
-  .table-stack #bidbox, .table-stack #status { max-width: none; margin: 0; }
+  .below-stack #bidbox, .below-stack #status { max-width: none; margin: 0; }
   /* Undo matches the primary Redeal; Report is an outlined error-report control. */
   #undo-btn:disabled { opacity: 0.5; }
   #report-btn { background: #fff; color: var(--red); border: 2px solid var(--red); font-weight: 700; }
@@ -222,6 +225,8 @@
     border: 1px solid var(--rule); border-radius: 8px; padding: 0.5rem 0.6rem;
     background: #fbfaf7; display: flex; flex-direction: column; gap: 0.4rem; }
   #table-chat .tc-empty { color: var(--muted); font-style: italic; }
+  #table-chat .tc-msg { font-size: 1rem; line-height: 1.4; }
+  #table-chat .tc-msg .tc-who { font-weight: 700; color: var(--accent); margin-right: 0.4rem; }
   #table-chat .tc-input-row { display: flex; gap: 0.4rem; }
   #table-chat .tc-input-row input { flex: 1; padding: 0.45rem 0.6rem; font-size: 1rem;
     border: 1px solid var(--rule); border-radius: 7px; }
@@ -280,23 +285,19 @@
             <button id="report-btn" title="Report a problem with this deal or the bidding">🚩 Report</button>
           </div>
         </div>
-        <div class="table-stack">
-          <div class="card" id="table-panel">
-            <div id="table-grid">
-              <div id="contract-display"></div>
-              <div id="slot-top" class="seat"></div>
-              <div id="slot-left" class="seat"></div>
-              <div id="center"></div>
-              <div id="slot-right" class="seat"></div>
-              <div id="below-table-row"></div>
-              <div id="slot-bottom" class="seat"></div>
-            </div>
+        <div class="card" id="table-panel">
+          <div id="table-grid">
+            <div id="contract-display"></div>
+            <div id="slot-top" class="seat"></div>
+            <div id="slot-left" class="seat"></div>
+            <div id="center"></div>
+            <div id="slot-right" class="seat"></div>
+            <div id="below-table-row"></div>
+            <div id="slot-bottom" class="seat"></div>
           </div>
+        </div>
 
-          <div id="show-compare-wrap">
-            <button id="show-compare-btn" hidden>Show BBA comparison</button>
-          </div>
-
+        <div class="below-stack">
           <div class="card" id="bidbox" hidden>
             <div class="bidbox-prompt">Your call:</div>
             <div class="bidrow" id="bidrow1"></div>
@@ -305,17 +306,23 @@
 
           <div class="card" id="status" hidden><span class="thinking" id="status-text"></span></div>
 
-          <!-- Table chat: UI scaffold only. Will later become a live chat between
-               two people playing the table together; no networking yet. -->
+          <div id="show-compare-wrap">
+            <button id="show-compare-btn" hidden>Show BBA comparison</button>
+          </div>
+
+          <!-- Table chat: a local chat area (scrollable list + bottom-pinned
+               input). Render-only for now — no networking to other players yet,
+               and not yet populated from any per-scenario message source. This
+               is the CHAT, separate from the sidebar Coaching view. -->
           <div class="card" id="table-chat">
             <div class="tc-head">Table chat</div>
             <div class="tc-log" id="tc-log">
               <div class="tc-empty">No messages yet — chat with the person you're playing with here.</div>
             </div>
-            <div class="tc-input-row">
-              <input id="tc-input" type="text" placeholder="Chat coming soon…" autocomplete="off" disabled>
-              <button id="tc-send" disabled title="Coming soon">Send</button>
-            </div>
+            <form class="tc-input-row" id="tc-form">
+              <input id="tc-input" type="text" placeholder="Type a message…" autocomplete="off">
+              <button id="tc-send" type="submit">Send</button>
+            </form>
           </div>
         </div>
       </div>

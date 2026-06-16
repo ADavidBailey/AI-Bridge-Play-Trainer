@@ -617,6 +617,30 @@ $("report-popup-close").onclick = closeReportModal;
 makeDraggable($("report-popup"), $("report-popup-bar"));   // drag (resize via CSS)
 $("search-input").addEventListener("input", (ev) => applyMenuFilter(ev.target.value));
 
+// ---- Table chat (local-only for now) ----
+// Renders a message at the bottom of the scrollable log and scrolls to it. No
+// networking yet: nothing is transmitted to other players. This is the bottom
+// chat panel, separate from the sidebar Coaching view (renderChat / #chat).
+function appendTableChat(text, who) {
+  const log = $("tc-log");
+  const empty = log.querySelector(".tc-empty");
+  if (empty) empty.remove();
+  const m = el("div", { class: "tc-msg" });
+  if (who) m.append(el("span", { class: "tc-who" }, who));
+  m.append(document.createTextNode(text));
+  log.append(m);
+  log.scrollTop = log.scrollHeight;   // newest message is at the bottom
+}
+$("tc-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const input = $("tc-input");
+  const text = (input.value || "").trim();
+  if (!text) return;
+  appendTableChat(text, "You");
+  input.value = "";
+  input.focus();
+});
+
 // BBA-comparison pop-up wiring.
 // ---- Options modal ----
 $("options-btn").onclick = () => { $("settings-modal").hidden = false; };
