@@ -231,6 +231,10 @@ CLAUDE_SYSTEM = (
     "or a truly exceptional, self-sufficient hand. "
     "Use bridge terms accurately: a weak two-bid shows a GOOD six-card suit and a "
     "weak hand (not a 'weak suit'), and such hands often lack outside entries. "
+    "Be precise about forcing levels: a new suit by responder at the ONE level "
+    "(1C-1D, 1D-1H, 1H-1S) is forcing for one round, NOT game-forcing; only a 2/1 "
+    "— a new suit at the TWO level by an unpassed responder (1H-2C, 1S-2D) — is "
+    "game-forcing. Never describe a one-level new-suit response as game-forcing. "
     "IMPORTANT — your one-sentence 'reason' is shown live to your partner (a "
     "student) during the auction, while your hand is hidden from them. Explain "
     "only what your call SHOWS or ASKS in standard 2/1 terms — the message "
@@ -346,7 +350,10 @@ def claude_review(client, hands_by_seat: dict, calls: list[str],
         "auction go, is the final contract sound, and one concrete takeaway. Be "
         "accurate about who bid what, and precise about high cards — rely on the HCP "
         "and distribution given above, and when you mention honors read each suit's "
-        "exact cards rather than estimating. Warm, specific, encouraging. Plain text, no markdown."
+        "exact cards rather than estimating. Be precise about forcing levels too: a "
+        "new suit by responder at the one level is forcing one round, not "
+        "game-forcing; only a 2/1 (a new suit at the two level by an unpassed "
+        "responder) is game-forcing. Warm, specific, encouraging. Plain text, no markdown."
     )
     # No extended thinking here: it's a short summary, and adaptive thinking can
     # eat the whole budget and truncate (or empty out) the visible review.
