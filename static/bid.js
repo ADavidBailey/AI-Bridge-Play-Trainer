@@ -30,6 +30,18 @@ let chatScenario = null;
 // and only shrinks below it (down to the 0.7 floor) on windows too narrow.
 // Raise it (1.2, 1.3, …) to scale the entire table up uniformly.
 const K_DESIGN = 1.0;
+
+// Which side You practice from on the NEXT deal: none = as dealt, once = always
+// Partner's hand (flipped), random = either per deal. Cycled by the arrow control.
+let rotateMode = "none";
+try { const r = localStorage.getItem("bid.rotateMode");
+      if (["none", "once", "random"].includes(r)) rotateMode = r; } catch (_) {}
+const ROTATE_CYCLE = ["none", "once", "random"];
+const ROTATE_UI = {
+  none:   { arrow: "↓", label: "You (as dealt)" },
+  once:   { arrow: "↑", label: "Partner's side" },
+  random: { arrow: "↕", label: "Random" },
+};
 try {
   const e = localStorage.getItem("bid.compareEnabled");
   if (e !== null) compareEnabled = e === "1";
@@ -144,7 +156,7 @@ async function deal() {
   showSide("coaching");           // surface the partner's thinking while we play
   setBusy("Dealing…");
   try {
-    const data = await api("POST", "/api/bid/session", { scenario: currentScenario, board_index: null });
+    const data = await api("POST", "/api/bid/session", { scenario: currentScenario, board_index: null, rotate: rotateMode });
     sessionId = data.session_id;
     render(data.state);
     seedScenarioChat(data.state);   // load this scenario's authored chat into #table-chat
@@ -638,6 +650,20 @@ $("report-send").onclick = sendReport;
 $("report-popup-close").onclick = closeReportModal;
 makeDraggable($("report-popup"), $("report-popup-bar"));   // drag (resize via CSS)
 $("search-input").addEventListener("input", (ev) => applyMenuFilter(ev.target.value));
+
+// ---- Seat / rotation control (cycles none -> once -> random) ----
+function updateRotateButton() {
+  const ui = ROTATE_UI[rotateMode];
+  $("rotate-btn").textContent = ui.arrow;
+  $("rc-mode").textContent = ui.label;
+}
+$("rotate-btn").onclick = () => {
+  const i = ROTATE_CYCLE.indexOf(rotateMode);
+  rotateMode = ROTATE_CYCLE[(i + 1) % ROTATE_CYCLE.length];
+  try { localStorage.setItem("bid.rotateMode", rotateMode); } catch (_) {}
+  updateRotateButton();
+};
+updateRotateButton();
 
 // ---- Table chat (local-only for now) ----
 // Renders a message at the bottom of the scrollable log and scrolls to it. No

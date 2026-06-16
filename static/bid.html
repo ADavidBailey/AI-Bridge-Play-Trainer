@@ -248,6 +248,17 @@
   #table-chat .tc-input-row button:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .err { color: var(--red); font-weight: 600; }
+
+  /* Seat / rotation control, pinned to the bottom of the right sidebar.
+     Cycles none -> once -> random; the arrow shows which side You sit. */
+  #sidebar { display: flex; flex-direction: column; }
+  #rotate-control { margin-top: auto; display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.6rem 0.7rem; border-top: 1px solid var(--rule); }
+  #rotate-control .rc-label { font-weight: 700; color: var(--accent); }
+  .rotate-btn { font-size: 1.5rem; line-height: 1; min-width: 2.2em; padding: 0.2rem 0.4rem;
+    border: 1px solid var(--rule); border-radius: 7px; background: #fff; cursor: pointer; font-weight: 700; }
+  .rotate-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+  #rotate-control .rc-mode { color: var(--muted); font-size: 0.95rem; }
 </style>
 </head>
 <body>
@@ -273,6 +284,11 @@
     </div>
     <div id="coaching-view" hidden>
       <div id="chat"><div class="chat-empty">Deal a hand — your partner's thinking appears here.</div></div>
+    </div>
+    <div id="rotate-control" title="Which side of the table You practice from. Click to change; takes effect on the next deal.">
+      <span class="rc-label">Seat</span>
+      <button id="rotate-btn" class="rotate-btn" type="button">↓</button>
+      <span class="rc-mode" id="rc-mode">You (as dealt)</span>
     </div>
   </aside>
 

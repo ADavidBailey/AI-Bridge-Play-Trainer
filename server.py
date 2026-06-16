@@ -1655,7 +1655,7 @@ class BidSession:
     BBA stub when no API key); East/West are BBA robots. Real compass == display
     frame (the user is genuinely South), so no rotation is needed."""
 
-    def __init__(self, scenario: str, board_index: int | None):
+    def __init__(self, scenario: str, board_index: int | None, rotate: str = "none"):
         board, di, vul, deal_pbn, idx, n = pb.load_board(scenario, board_index)
         self.scenario = scenario
         self.chat = _scenario_chat(scenario)   # authored table-chat (btn/<scenario>.btn)
@@ -1664,6 +1664,23 @@ class BidSession:
         self.deal = board.deal
         self.dealer_idx = di
         self.dealer = pb.SEATS[di]
+
+        # Student-position rotation (always a 180° half-turn, You <-> Partner):
+        #   none   -> You hold South (as dealt)
+        #   once   -> You always hold North (the partner's hand)
+        #   random -> either, per deal
+        # Internals stay in real compass; state() relabels seats so You always
+        # comes out as "S" for the (compass-hardwired) front end.
+        self.rotate = rotate if rotate in ("none", "once", "random") else "none"
+        if self.rotate == "once":
+            self.user_seat = "N"
+        elif self.rotate == "random":
+            self.user_seat = secrets.choice(["S", "N"])
+        else:
+            self.user_seat = "S"
+        self.partner_seat = "S" if self.user_seat == "N" else "N"
+        # Shift that maps the user's real seat to South in the display frame.
+        self._shift = (pb.SEATS.index("S") - pb.SEATS.index(self.user_seat)) % 4
         self.vul = vul
         self.cc = str(pb.DEFAULT_CC)
         self.bba_input = pb.write_bba_input(deal_pbn, self.dealer, vul)
@@ -1683,6 +1700,14 @@ class BidSession:
         self.calls.append(call)
         self.meta.append({"seat": seat, "call": call, "engine": engine, "reason": reason})
 
+    def _disp(self, seat: str) -> str:
+        """Real-compass seat -> display seat (You = South)."""
+        return pb.SEATS[(pb.SEATS.index(seat) + self._shift) % 4]
+
+    def _real(self, disp: str) -> str:
+        """Display seat -> real-compass seat."""
+        return pb.SEATS[(pb.SEATS.index(disp) - self._shift) % 4]
+
     def step(self):
         """Advance exactly ONE non-user seat (Claude N or BBA E/W). No-op when
         it's South's turn; finalizes (compare + review) when the auction ends.
@@ -1691,24 +1716,25 @@ class BidSession:
             self._finalize()
             return
         seat = pb.seat_at(self.dealer_idx, len(self.calls))
-        if seat == "S":
+        if seat == self.user_seat:
             return
         t0 = time.perf_counter()
-        if seat == "N" and self.client is not None:
+        if seat == self.partner_seat and self.client is not None:
             legal = pb.legal_calls(self.calls, self.dealer_idx)
+            partner_hand = hand_of(self.deal, LETTER_SEAT[self.partner_seat])
             try:
-                call, reason = pb.claude_next_call(self.client, self.deal.north,
+                call, reason = pb.claude_next_call(self.client, partner_hand,
                                                    self.calls, self.dealer, self.vul, legal)
-                self._record("N", call, "Claude", reason)
+                self._record(self.partner_seat, call, "Claude", reason)
             except Exception as e:
                 # A transient Claude/API hiccup shouldn't dead-end the auction —
                 # fall back to the BBA engine for this one call so bidding finishes.
                 print(f"[bid] Claude call failed ({e!r}); falling back to BBA", flush=True)
                 call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
-                self._record("N", call, "Claude (BBA fallback — Claude unavailable)", "")
+                self._record(self.partner_seat, call, "Claude (BBA fallback — Claude unavailable)", "")
         else:
             call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
-            engine = "Claude (BBA stub — no API key)" if seat == "N" else "Robot (BBA)"
+            engine = "Claude (BBA stub — no API key)" if seat == self.partner_seat else "Robot (BBA)"
             self._record(seat, call, engine, "")
         ms = round((time.perf_counter() - t0) * 1000)
         self.meta[-1]["ms"] = ms
@@ -1719,11 +1745,11 @@ class BidSession:
     def user_call(self, call: str):
         if pb.auction_over(self.calls):
             raise ValueError("the auction is already over")
-        if pb.seat_at(self.dealer_idx, len(self.calls)) != "S":
+        if pb.seat_at(self.dealer_idx, len(self.calls)) != self.user_seat:
             raise ValueError("it is not your turn")
         if call not in pb.legal_calls(self.calls, self.dealer_idx):
             raise ValueError(f"illegal call: {call}")
-        self._record("S", call, "You", "")
+        self._record(self.user_seat, call, "You", "")
         if pb.auction_over(self.calls):   # your pass/bid can itself end the auction
             self._finalize()
 
@@ -1788,33 +1814,41 @@ class BidSession:
     def state(self):
         over = pb.auction_over(self.calls)
         to_play = None if over else pb.seat_at(self.dealer_idx, len(self.calls))
+        user_hand = hand_of(self.deal, LETTER_SEAT[self.user_seat])
+        # Seats go out in DISPLAY frame (You = South); meta seats are real compass.
         st = {
             "scenario": self.scenario,
             "chat": self.chat,
             "board_index": self.board_index,
             "n_boards": self.n_boards,
-            "dealer": self.dealer,
-            "vul": self.vul,
-            "south_hand": hand_to_dict(hand_of(self.deal, Player.south)),
-            "south_hcp": hand_hcp(hand_of(self.deal, Player.south)),
-            "calls": [{**m, "display": pb.call_display(m["call"])} for m in self.meta],
-            "to_play": to_play,
-            "user_to_play": to_play == "S",
-            "can_undo": any(m["seat"] == "S" for m in self.meta),
-            "legal": pb.legal_calls(self.calls, self.dealer_idx) if to_play == "S" else [],
+            "dealer": self._disp(self.dealer),
+            "vul": self.vul,                       # by partnership — unchanged by a 180° flip
+            "south_hand": hand_to_dict(user_hand),
+            "south_hcp": hand_hcp(user_hand),
+            "calls": [{**m, "seat": self._disp(m["seat"]), "display": pb.call_display(m["call"])}
+                      for m in self.meta],
+            "to_play": self._disp(to_play) if to_play else None,
+            "user_to_play": to_play == self.user_seat,
+            "can_undo": any(m["seat"] == self.user_seat for m in self.meta),
+            "legal": pb.legal_calls(self.calls, self.dealer_idx) if to_play == self.user_seat else [],
             "complete": over,
             "has_claude": self.client is not None,
+            "rotate": self.rotate,
         }
         if over:
-            st["contract"] = pb.final_contract(self.calls, self.dealer_idx) or "Passed out"
+            contract = pb.final_contract(self.calls, self.dealer_idx) or "Passed out"
+            if " by " in contract:
+                call_part, decl = contract.rsplit(" by ", 1)
+                contract = f"{call_part} by {self._disp(decl)}"
+            st["contract"] = contract
             st["bba_compare"] = [{"call": c, "display": pb.call_display(c)}
                                  for c in (self.bba_compare or [])]
             st["review"] = self.review
             st["dd"] = self.dd
-            st["all_hands"] = {s: hand_to_dict(hand_of(self.deal, LETTER_SEAT[s]))
-                               for s in ("N", "E", "S", "W")}
-            st["all_hcp"] = {s: hand_hcp(hand_of(self.deal, LETTER_SEAT[s]))
-                             for s in ("N", "E", "S", "W")}
+            st["all_hands"] = {d: hand_to_dict(hand_of(self.deal, LETTER_SEAT[self._real(d)]))
+                               for d in ("N", "E", "S", "W")}
+            st["all_hcp"] = {d: hand_hcp(hand_of(self.deal, LETTER_SEAT[self._real(d)]))
+                             for d in ("N", "E", "S", "W")}
             st["timings"] = {
                 "review_ms": self.review_ms,
                 "compare_ms": self.compare_ms,
@@ -1829,12 +1863,13 @@ class BidSession:
 class BidStartBody(BaseModel):
     scenario: str
     board_index: int | None = None
+    rotate: str = "none"   # none | once | random — student-position half-turn
 
 
 @app.post("/api/bid/session")
 def bid_start(body: BidStartBody):
     try:
-        sess = BidSession(body.scenario, body.board_index)
+        sess = BidSession(body.scenario, body.board_index, body.rotate)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except (ValueError, RuntimeError) as e:
