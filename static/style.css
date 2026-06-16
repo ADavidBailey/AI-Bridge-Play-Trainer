@@ -864,6 +864,22 @@ button.primary:hover { background: #16456a; }
 .bid-quiz-call {
   flex: 1;
 }
+/* Two-row selector rows: buttons share the width evenly, like the /bid box. */
+.bid-quiz-row {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+.bid-quiz-row .bid-quiz-btn {
+  flex: 1;
+  min-width: 2.4em;
+  font-weight: 700;
+}
+.bid-quiz-btn.sel {
+  background: #2b7a78;
+  color: #fff;
+  border-color: #2b7a78;
+}
 
 /* Feedback panel overlays the sidebar so it stays in view while you keep
    playing the next trick — no scrolling down to see what Claude said. */

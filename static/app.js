@@ -1219,40 +1219,53 @@ function highestBidSoFarRank() {
   return hi;
 }
 
+// Two-row BBO-style selector (matches the /bid table): row 1 is Pass + levels
+// 1-7; tapping a level reveals/enables the strains (+ X/XX) on row 2.
+let quizSelLevel = null;
+
 function renderBidBox() {
+  quizSelLevel = null;
   const box = el("div", { class: "bid-quiz-box" });
   box.appendChild(el("div", { class: "bid-quiz-prompt" }, "What do you bid?"));
 
+  const row1 = el("div", { class: "bid-quiz-row" });   // Pass + levels 1-7
+  const row2 = el("div", { class: "bid-quiz-row" });   // strains + X/XX (after a level)
+  box.appendChild(row1);
+  box.appendChild(row2);
+
   const minLegalRank = highestBidSoFarRank() + 1;
-  const grid = el("div", { class: "bid-quiz-grid" });
-  for (let level = 1; level <= 7; level++) {
+  const levelOK = (lvl) => STRAINS.some((st) => bidRank(`${lvl}${st}`) >= minLegalRank);
+
+  function paint() {
+    row1.innerHTML = "";
+    row2.innerHTML = "";
+
+    row1.appendChild(el("button", { class: "bid-quiz-btn",
+      onclick: () => { quizSelLevel = null; onBidQuizClick("Pass"); } }, "Pass"));
+
+    for (let lvl = 1; lvl <= 7; lvl++) {
+      const b = el("button", { class: "bid-quiz-btn" + (quizSelLevel === lvl ? " sel" : "") });
+      if (levelOK(lvl)) b.onclick = () => { quizSelLevel = lvl; paint(); };
+      else b.disabled = true;
+      b.appendChild(document.createTextNode(String(lvl)));
+      row1.appendChild(b);
+    }
+
     for (const strain of STRAINS) {
-      const code = `${level}${strain}`;
-      const sufficient = bidRank(code) >= minLegalRank;
-      const attrs = {
-        class: `bid-quiz-btn ${suitClass(strain)}`,
-      };
-      if (sufficient) {
-        attrs.onclick = () => onBidQuizClick(code);
-      } else {
-        attrs.disabled = true;
-      }
-      const cell = el("button", attrs);
-      cell.appendChild(document.createTextNode(level + ""));
-      cell.appendChild(el("span", {}, STRAIN_GLYPH[strain]));
-      grid.appendChild(cell);
+      const ok = quizSelLevel !== null && bidRank(`${quizSelLevel}${strain}`) >= minLegalRank;
+      const b = el("button", { class: `bid-quiz-btn ${suitClass(strain)}` });
+      if (ok) b.onclick = () => { const lv = quizSelLevel; quizSelLevel = null; onBidQuizClick(`${lv}${strain}`); };
+      else b.disabled = true;
+      b.appendChild(el("span", {}, STRAIN_GLYPH[strain]));
+      row2.appendChild(b);
+    }
+    for (const [code, label] of [["X", "X"], ["XX", "XX"]]) {
+      row2.appendChild(el("button", { class: "bid-quiz-btn",
+        onclick: () => { quizSelLevel = null; onBidQuizClick(code); } }, label));
     }
   }
-  box.appendChild(grid);
 
-  const calls = el("div", { class: "bid-quiz-calls" });
-  for (const [code, label] of [["Pass", "Pass"], ["X", "Double"], ["XX", "Redouble"]]) {
-    calls.appendChild(el("button", {
-      class: "bid-quiz-btn bid-quiz-call",
-      onclick: () => onBidQuizClick(code),
-    }, label));
-  }
-  box.appendChild(calls);
+  paint();
   return box;
 }
 
