@@ -260,6 +260,8 @@ function renderBidbox(state) {
   const legal = new Set(state.legal);
   row1.innerHTML = ""; row2.innerHTML = "";
 
+  // Row 1: the calls that don't need a strain — Pass, levels 1-7, Double,
+  // Redouble. Tapping a level reveals the strain row below.
   const pass = el("button", { class: "bidbtn" }, "Pass");
   pass.disabled = !legal.has("Pass");
   if (!pass.disabled) pass.onclick = () => { selLevel = null; makeCall("Pass"); };
@@ -270,6 +272,15 @@ function renderBidbox(state) {
     if (!b.disabled) b.onclick = () => { selLevel = n; renderBidbox(state); };
     row1.append(b);
   }
+  for (const [c, label] of [["X", "X"], ["XX", "XX"]]) {
+    if (!legal.has(c)) continue;   // show Double/Redouble only when legal (BBO-style)
+    const b = el("button", { class: "bidbtn" }, label);
+    b.onclick = () => { selLevel = null; makeCall(c); };
+    row1.append(b);
+  }
+
+  // Row 2: strains — hidden until a level is tapped (BBO-style reveal).
+  row2.hidden = selLevel === null;
   for (const st of STRAINS) {
     const label = st === "NT" ? el("span", {}, "NT")
                               : el("span", { class: SUIT_CLASS[st] }, SUIT_SYM[st]);
@@ -277,12 +288,6 @@ function renderBidbox(state) {
     const active = selLevel !== null && legal.has(`${selLevel}${st}`);
     b.disabled = !active;
     if (active) b.onclick = () => { const lv = selLevel; selLevel = null; makeCall(`${lv}${st}`); };
-    row2.append(b);
-  }
-  for (const [c, label] of [["X", "X"], ["XX", "XX"]]) {
-    const b = el("button", { class: "bidbtn" }, label);
-    b.disabled = !legal.has(c);
-    if (!b.disabled) b.onclick = () => { selLevel = null; makeCall(c); };
     row2.append(b);
   }
 }

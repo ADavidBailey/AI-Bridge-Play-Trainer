@@ -145,6 +145,7 @@
   /* BBO-style two-row bid selector. */
   .bidbox-prompt { font-weight: 700; margin-bottom: 0.5rem; text-align: center; }
   .bidrow { display: flex; gap: 0.35rem; justify-content: center; flex-wrap: wrap; margin: 0.35rem 0; }
+  .bidrow[hidden] { display: none; }   /* strain row is hidden until a level is tapped */
   .bidbtn { min-width: 2.6em; font-size: 1.6rem; font-weight: 700; padding: 0.5rem 0.6rem;
             border: 1px solid var(--rule); border-radius: 7px; background: #fff; cursor: pointer; }
   .bidbtn:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
