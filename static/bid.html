@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="/static/style.css">
 <style>
   /* Table on the left, Scenario/Coaching panel on the right. */
-  #layout { grid-template-columns: 1fr 25%; }
+  #layout { grid-template-columns: 1fr 30%; }   /* wider Coaching side panel (D) */
   #layout > main { grid-column: 1; grid-row: 1; }
   #layout > #sidebar { grid-column: 2; grid-row: 1; }
 
@@ -48,17 +48,21 @@
      table — and Undo's position is fixed to the (fixed-size) table, so it never
      jumps as the deal changes. */
   .table-row { display: grid; grid-template-columns: 1fr auto 1fr;
-               grid-template-rows: auto 1fr; align-items: start;
+               grid-template-rows: auto auto 1fr; align-items: start;
                column-gap: 1rem; row-gap: 0.8rem; min-height: calc(100vh - 150px); }
   /* The wrapper dissolves so lc-top / lc-bottom become grid items themselves. */
   .left-controls { display: contents; }
   .lc-top    { grid-column: 1; grid-row: 1; justify-self: end; width: 120px;
                display: flex; flex-direction: column; align-items: center; gap: 1.1rem; }
-  .lc-bottom { grid-column: 1; grid-row: 2; justify-self: end; align-self: start; width: 120px;
+  /* lc-bottom spans down so the left column stays full-height; its content sits
+     at the top (aligned with the bid box below the table). */
+  .lc-bottom { grid-column: 1; grid-row: 2 / 4; justify-self: end; align-self: start; width: 120px;
                display: flex; flex-direction: column; gap: 0.6rem; }
   #table-panel { grid-column: 2; grid-row: 1; }
   .below-stack { grid-column: 2; grid-row: 2; align-self: start;
                  display: flex; flex-direction: column; gap: 0.8rem; }
+  /* Table chat spans from the table's left edge across to the right panel. */
+  #table-chat { grid-column: 2 / 4; grid-row: 3; align-self: start; }
   /* Compact left-column buttons — they rarely change, so users learn them and
      they don't need to be large. */
   .left-controls button { width: 100%; font-size: 1.35rem; padding: 0.7rem 0.3rem; }
@@ -253,6 +257,17 @@
 
   .err { color: var(--red); font-weight: 600; }
 
+  /* Bid selector greyed (non-clickable) when it isn't your turn (B). */
+  #bidbox.waiting { opacity: 0.5; }
+  /* Auction-end "Play / Review" button (F). */
+  #play-review-wrap { text-align: center; margin: 0.4rem 0; }
+  #play-review-btn { font-size: 1.3rem; padding: 0.6rem 1.6rem; }
+  /* Spinner beside the seat that's currently thinking/bidding (C). */
+  .seat-spinner { display: inline-block; width: 0.85em; height: 0.85em; margin-right: 0.4em;
+    vertical-align: -0.1em; border: 2px solid var(--rule); border-top-color: var(--accent);
+    border-radius: 50%; animation: seat-spin 0.7s linear infinite; }
+  @keyframes seat-spin { to { transform: rotate(360deg); } }
+
   /* Seat / rotation control, pinned to the bottom of the right sidebar.
      Cycles none -> once -> random; the arrow shows which side You sit. */
   #sidebar { display: flex; flex-direction: column; }
@@ -343,20 +358,26 @@
             <button id="show-compare-btn" hidden>Show BBA comparison</button>
           </div>
 
-          <!-- Table chat: a local chat area (scrollable list + bottom-pinned
-               input). Render-only for now — no networking to other players yet,
-               and not yet populated from any per-scenario message source. This
-               is the CHAT, separate from the sidebar Coaching view. -->
-          <div class="card" id="table-chat">
-            <div class="tc-head">Table chat</div>
-            <div class="tc-log" id="tc-log">
-              <div class="tc-empty">No messages yet — chat with the person you're playing with here.</div>
-            </div>
-            <form class="tc-input-row" id="tc-form">
-              <input id="tc-input" type="text" placeholder="Type a message…" autocomplete="off">
-              <button id="tc-send" type="submit">Send</button>
-            </form>
+          <!-- Auction-end pause: one click reveals all four hands (and, later,
+               starts card play). Shown only when the auction is complete and
+               the hands haven't been revealed yet. -->
+          <div id="play-review-wrap" hidden>
+            <button id="play-review-btn" class="primary" type="button">Play / Review</button>
           </div>
+        </div>
+
+        <!-- Table chat: its own grid cell, spanning from the table's left edge
+             across to the right panel. Local chat (scrollable list + input);
+             separate from the sidebar Coaching view. -->
+        <div class="card" id="table-chat">
+          <div class="tc-head">Table chat</div>
+          <div class="tc-log" id="tc-log">
+            <div class="tc-empty">No messages yet — chat with the person you're playing with here.</div>
+          </div>
+          <form class="tc-input-row" id="tc-form">
+            <input id="tc-input" type="text" placeholder="Type a message…" autocomplete="off">
+            <button id="tc-send" type="submit">Send</button>
+          </form>
         </div>
       </div>
 

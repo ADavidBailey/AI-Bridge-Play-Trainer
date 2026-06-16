@@ -9,6 +9,10 @@ const SUIT_SYM = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_CLASS = { S: "suit-spade", H: "suit-heart", D: "suit-diamond", C: "suit-club" };
 // Seats by role, not compass — the user always sits at the bottom; the board may rotate.
 const ROLE = { S: "You", N: "Claude", W: "LHO", E: "RHO" };
+const SEAT_SLOT = { S: "slot-bottom", N: "slot-top", W: "slot-left", E: "slot-right" };
+// After the auction ends we pause: the four hands stay hidden until the user
+// clicks "Play / Review". `revealed` flips true on that click (reset each deal).
+let revealed = false;
 const SEAT_NAME = { N: "Claude", E: "RHO", W: "LHO" };
 
 let currentScenario = null;
@@ -29,7 +33,7 @@ let chatScenario = null;
 // fitTable() renders at exactly this scale on any window wide enough to fit it,
 // and only shrinks below it (down to the 0.7 floor) on windows too narrow.
 // Raise it (1.2, 1.3, …) to scale the entire table up uniformly.
-const K_DESIGN = 1.0;
+const K_DESIGN = 1.3;
 
 // Which side You practice from on the NEXT deal: none = as dealt, once = always
 // Partner's hand (flipped), random = either per deal. Cycled by the arrow control.
@@ -151,6 +155,7 @@ async function onScenario(name) {
 async function deal() {
   if (!currentScenario) return;
   showErr("");
+  revealed = false;               // new deal — hands hidden until "Play / Review"
   $("setup-block").hidden = true;
   $("table-wrap").hidden = false;
   showSide("coaching");           // surface the partner's thinking while we play
@@ -178,7 +183,7 @@ async function runSteps() {
   while (true) {
     const st = window._lastState;
     if (!st || st.complete || st.user_to_play) return;
-    setBusy(`${SEAT_NAME[st.to_play] || st.to_play} ${st.to_play === "N" ? "is thinking…" : "is bidding…"}`);
+    // No central "thinking" banner — the per-seat spinner (in render) shows who's working.
     let data;
     try { data = await api("POST", `/api/bid/session/${sessionId}/step`); }
     catch (e) { showErr("Bidding error: " + e.message); return; }
@@ -267,13 +272,16 @@ function seatHand(slot, role, hand, hcp, goldTurn, fanned) {
 
 function renderBidbox(state) {
   const box = $("bidbox"), row1 = $("bidrow1"), row2 = $("bidrow2");
-  if (!state.user_to_play) { box.hidden = true; selLevel = null; return; }
-  box.hidden = false;
-  const legal = new Set(state.legal);
+  // The selector stays on screen for the whole auction — greyed (non-clickable)
+  // when it isn't your turn. It only disappears once the auction is complete.
+  box.hidden = !!state.complete;
+  const yourTurn = !!state.user_to_play;
+  box.classList.toggle("waiting", !yourTurn);
+  if (!yourTurn) selLevel = null;
+  const legal = yourTurn ? new Set(state.legal) : new Set();
   row1.innerHTML = ""; row2.innerHTML = "";
 
-  // Row 1: the calls that don't need a strain — Pass, levels 1-7, Double,
-  // Redouble. Tapping a level reveals the strain row below.
+  // Row 1: Pass, levels 1-7, and Double/Redouble (when legal).
   const pass = el("button", { class: "bidbtn" }, "Pass");
   pass.disabled = !legal.has("Pass");
   if (!pass.disabled) pass.onclick = () => { selLevel = null; makeCall("Pass"); };
@@ -285,19 +293,20 @@ function renderBidbox(state) {
     row1.append(b);
   }
   for (const [c, label] of [["X", "X"], ["XX", "XX"]]) {
-    if (!legal.has(c)) continue;   // show Double/Redouble only when legal (BBO-style)
+    if (!legal.has(c)) continue;
     const b = el("button", { class: "bidbtn" }, label);
     b.onclick = () => { selLevel = null; makeCall(c); };
     row1.append(b);
   }
 
-  // Row 2: strains — hidden until a level is tapped (BBO-style reveal).
-  row2.hidden = selLevel === null;
+  // Row 2: strains — always on screen now, disabled until you tap a level on
+  // your turn (the whole selector stays visible, just greyed when inactive).
+  row2.hidden = false;
   for (const st of STRAINS) {
     const label = st === "NT" ? el("span", {}, "NT")
                               : el("span", { class: SUIT_CLASS[st] }, SUIT_SYM[st]);
     const b = el("button", { class: "bidbtn" }, label);
-    const active = selLevel !== null && legal.has(`${selLevel}${st}`);
+    const active = yourTurn && selLevel !== null && legal.has(`${selLevel}${st}`);
     b.disabled = !active;
     if (active) b.onclick = () => { const lv = selLevel; selLevel = null; makeCall(`${lv}${st}`); };
     row2.append(b);
@@ -532,8 +541,9 @@ function render(state) {
       el("div", { class: "contract-line-sub" }, `${state.vul} vul`));
   }
 
-  // Seats: reveal all four hands when the auction ends; otherwise hide the others.
-  if (state.complete) {
+  // Seats: reveal all four hands only after the user clicks "Play / Review";
+  // otherwise (mid-auction, or auction just ended) hide the other three.
+  if (state.complete && revealed) {
     seatHand($("slot-top"), ROLE.N, state.all_hands.N, state.all_hcp.N, false, true);
     seatHand($("slot-left"), ROLE.W, state.all_hands.W, state.all_hcp.W, false, false);
     seatHand($("slot-right"), ROLE.E, state.all_hands.E, state.all_hcp.E, false, false);
@@ -543,6 +553,13 @@ function render(state) {
     faceDown($("slot-left"), ROLE.W);
     faceDown($("slot-right"), ROLE.E);
     seatHand($("slot-bottom"), "You", state.south_hand, state.south_hcp, state.user_to_play, true);
+  }
+
+  // A small spinner sits beside whichever non-you seat is currently
+  // thinking/bidding — so "who's working" shows at the seat, not over the selector.
+  if (!state.complete && !state.user_to_play && SEAT_SLOT[state.to_play]) {
+    const plate = document.querySelector(`#${SEAT_SLOT[state.to_play]} .seat-name`);
+    if (plate) plate.insertAdjacentHTML("afterbegin", '<span class="seat-spinner" aria-hidden="true"></span>');
   }
 
   const center = $("center"); center.innerHTML = "";
@@ -556,9 +573,22 @@ function render(state) {
   // we're not mid-auto-step (their turn, or the auction's finished).
   $("undo-btn").disabled = !(state.can_undo && (state.user_to_play || state.complete));
 
-  if (state.complete) { $("bidbox").hidden = true; renderResult(state); }
-  else { hideComparePopup(); renderBidbox(state); }
+  if (state.complete) {
+    $("bidbox").hidden = true;
+    // Pause at auction-end: show "Play / Review"; reveal + comparison wait for the click.
+    $("play-review-wrap").hidden = revealed;
+    if (revealed) renderResult(state);
+  } else {
+    $("play-review-wrap").hidden = true;
+    hideComparePopup();
+    renderBidbox(state);
+  }
 }
+
+$("play-review-btn").onclick = () => {
+  revealed = true;
+  if (window._lastState) render(window._lastState);   // one click → reveal all four hands
+};
 
 // ---- report a problem ----
 // The note is all the user supplies; the server reads scenario/deal/auction
@@ -612,6 +642,7 @@ async function sendReport() {
 async function undo() {
   if (!sessionId) return;
   showErr("");
+  revealed = false;   // taking back a call returns us to bidding — re-hide hands
   $("undo-btn").disabled = true;
   try {
     const data = await api("POST", `/api/bid/session/${sessionId}/undo`);
