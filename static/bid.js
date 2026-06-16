@@ -517,8 +517,8 @@ function render(state) {
   $("table-wrap").hidden = false;
   $("table-grid").classList.toggle("cards", cardsMode);   // wide fanned hands + narrow table
 
-  $("meta-line").innerHTML =
-    `<strong>${state.scenario.replaceAll("_", " ")}</strong> &nbsp;·&nbsp; deal ${state.board_index + 1}/${state.n_boards}`;
+  $("header-meta").innerHTML =
+    `— <strong>${state.scenario.replaceAll("_", " ")}</strong> &nbsp;·&nbsp; deal ${state.board_index + 1}/${state.n_boards}`;
   renderTableInfo(state);
 
   $("contract-display").innerHTML = "";

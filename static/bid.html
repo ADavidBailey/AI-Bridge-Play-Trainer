@@ -29,6 +29,10 @@
 
   .meta-line { font-size: 1.05rem; margin: 0.25rem 0 0.6rem; text-align: center; }
   .meta-line strong { font-weight: 700; }
+  /* Scenario · deal shown to the right of the bolded title, on the header line. */
+  .header-title { display: flex; align-items: baseline; gap: 0.55rem; flex-wrap: wrap; }
+  .header-meta { font-size: 1.1rem; color: var(--muted); }
+  .header-meta strong { color: var(--ink); font-weight: 700; }
 
   /* Startup prompt before the first deal: intro line above, big "pick" line with
      an arrow pointing to the scenarios on the right. */
@@ -264,8 +268,9 @@
 <body>
 <header>
   <div id="header-row">
-    <div>
+    <div class="header-title">
       <h1>Bidding with Claude</h1>
+      <span id="header-meta" class="header-meta"></span>
     </div>
   </div>
 </header>
@@ -299,7 +304,6 @@
     </div>
 
     <div id="table-wrap" hidden>
-      <div class="meta-line" id="meta-line"></div>
 
       <div class="table-row">
         <div class="left-controls">
