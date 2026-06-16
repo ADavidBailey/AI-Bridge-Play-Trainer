@@ -68,6 +68,51 @@ def _scenario_pbn_path(scenario: str) -> Path | None:
             return p
     return None
 
+
+BTN_DIR = DATA_ROOT / "btn"
+_BTN_SUIT = {"!S": "♠", "!H": "♥", "!D": "♦", "!C": "♣",
+             "!s": "♠", "!h": "♥", "!d": "♦", "!c": "♣"}
+
+
+def _scenario_chat(scenario: str) -> list[str]:
+    """Authored table-chat for a scenario, pulled from its btn/<scenario>.btn
+    `/*@chat ... @chat*/` block. Returns an ordered list of message strings —
+    one per paragraph (blank lines and `---` headers split paragraphs); `---`
+    markers are stripped and `!S/!H/!D/!C` become ♠♥♦♣. [] when absent."""
+    import re
+    path = BTN_DIR / f"{scenario}.btn"
+    if not path.exists():
+        return []
+    m = re.search(r"/\*@chat(.*?)@chat\*/", path.read_text(), re.DOTALL)
+    if not m:
+        return []
+    body = m.group(1)
+    for tok, sym in _BTN_SUIT.items():
+        body = body.replace(tok, sym)
+    messages: list[str] = []
+    buf: list[str] = []
+
+    def flush():
+        if buf:
+            para = "\n".join(buf).strip()
+            if para:
+                messages.append(para)
+            buf.clear()
+
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            flush()
+        elif stripped.startswith("---"):
+            flush()
+            header = stripped.lstrip("-").strip()
+            if header:
+                messages.append(header)
+        else:
+            buf.append(raw.rstrip())
+    flush()
+    return messages
+
 SEAT_LETTER = {Player.north: "N", Player.east: "E", Player.south: "S", Player.west: "W"}
 LETTER_SEAT = {v: k for k, v in SEAT_LETTER.items()}
 DENOM_LETTER = {Denom.spades: "S", Denom.hearts: "H", Denom.diamonds: "D", Denom.clubs: "C", Denom.nt: "NT"}
@@ -1613,6 +1658,7 @@ class BidSession:
     def __init__(self, scenario: str, board_index: int | None):
         board, di, vul, deal_pbn, idx, n = pb.load_board(scenario, board_index)
         self.scenario = scenario
+        self.chat = _scenario_chat(scenario)   # authored table-chat (btn/<scenario>.btn)
         self.board_index = idx
         self.n_boards = n
         self.deal = board.deal
@@ -1744,6 +1790,7 @@ class BidSession:
         to_play = None if over else pb.seat_at(self.dealer_idx, len(self.calls))
         st = {
             "scenario": self.scenario,
+            "chat": self.chat,
             "board_index": self.board_index,
             "n_boards": self.n_boards,
             "dealer": self.dealer,

@@ -21,6 +21,9 @@ let comparePos = null;
 let cardsMode = false;
 // Show ten as "T" (J T 9) instead of "10" (J 10 9).
 let tenAsT = false;
+// Which scenario's authored chat has been seeded into #table-chat (so we seed
+// once per scenario, not on every re-render or same-scenario Redeal).
+let chatScenario = null;
 try {
   const e = localStorage.getItem("bid.compareEnabled");
   if (e !== null) compareEnabled = e === "1";
@@ -138,6 +141,7 @@ async function deal() {
     const data = await api("POST", "/api/bid/session", { scenario: currentScenario, board_index: null });
     sessionId = data.session_id;
     render(data.state);
+    seedScenarioChat(data.state);   // load this scenario's authored chat into #table-chat
     await runSteps();
   } catch (e) { showErr("Couldn't deal: " + e.message); }
 }
@@ -640,6 +644,23 @@ $("tc-form").addEventListener("submit", (ev) => {
   input.value = "";
   input.focus();
 });
+
+// Seed the scenario's authored chat (state.chat, from btn/<scenario>.btn) into
+// the panel. Done once per scenario: switching scenarios clears and re-seeds;
+// a same-scenario Redeal keeps the existing thread (incl. user messages).
+function seedScenarioChat(state) {
+  if (!state || state.scenario === chatScenario) return;
+  chatScenario = state.scenario;
+  const log = $("tc-log");
+  log.innerHTML = "";
+  const lines = state.chat || [];
+  if (!lines.length) {
+    log.append(el("div", { class: "tc-empty" },
+      "No messages yet — chat with the person you're playing with here."));
+    return;
+  }
+  for (const text of lines) appendTableChat(text, "Coach");
+}
 
 // BBA-comparison pop-up wiring.
 // ---- Options modal ----
