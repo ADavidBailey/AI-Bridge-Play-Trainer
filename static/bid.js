@@ -203,8 +203,15 @@ function handRows(target, hand) {
 }
 
 function faceDown(slot, role) {
-  slot.className = "seat face-down";
+  // A hidden hand is shown as a fan of 13 card-backs (BBO bidding-table look),
+  // so it still reads as "13 cards" rather than a blank block.
+  slot.className = "seat";
   slot.innerHTML = "";
+  const wrap = el("div", { class: "hand-wrap" });
+  const row = el("div", { class: "cardback-row" });
+  for (let i = 0; i < 13; i++) row.append(el("div", { class: "cardback" }));
+  wrap.append(row);
+  slot.append(wrap);
   slot.append(el("div", { class: "seat-name" }, role));
 }
 
