@@ -449,6 +449,14 @@ function renderTableInfo(state) {
                       ((dealer === "E" || dealer === "W") && ewVul);
   $("board-badge").innerHTML =
     `<div class="bb-diamond" style="--nv:${nv};--sv:${nv};--ev:${ev};--wv:${ev}"></div>` +
+    // Diagonals from each outer corner to the matching inner-square corner. The
+    // inner square is inset 24%, so its corners sit at 24%/76% of the box.
+    `<svg class="bb-lines" viewBox="0 0 100 100" preserveAspectRatio="none">` +
+      `<line x1="0" y1="0" x2="24" y2="24"></line>` +
+      `<line x1="100" y1="0" x2="76" y2="24"></line>` +
+      `<line x1="100" y1="100" x2="76" y2="76"></line>` +
+      `<line x1="0" y1="100" x2="24" y2="76"></line>` +
+    `</svg>` +
     `<div class="bb-center">${state.board_index + 1}</div>` +
     `<div class="bb-d ${dealer.toLowerCase()}${dealerOnRed ? " on-red" : ""}">D</div>`;
 

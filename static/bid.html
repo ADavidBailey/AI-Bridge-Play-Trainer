@@ -38,12 +38,24 @@
   .setup-arrow { font-size: 2.3rem; vertical-align: -0.15em; margin-left: 0.3rem; }
 
   /* Table centered in the main area; full-height left column (BBO-style). */
-  .table-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: stretch; gap: 1rem; }
-  .left-controls { justify-self: start; align-self: stretch; width: 150px;
+  .table-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 1rem; }
+  /* Left column runs the full height of the viewport. Its top block is pinned to
+     the top and the bottom block (Redeal/Undo/Report) to the bottom, so the Undo
+     button stays in exactly the same place no matter how the deal changes. */
+  .left-controls { justify-self: start; align-self: start; width: 120px;
+                   height: calc(100vh - 150px);
                    display: flex; flex-direction: column; justify-content: space-between; gap: 1.2rem; }
   .lc-top { display: flex; flex-direction: column; align-items: center; gap: 1.1rem; }
-  .lc-bottom { display: flex; flex-direction: column; gap: 0.7rem; }
-  .left-controls button { width: 100%; }
+  .lc-bottom { display: flex; flex-direction: column; gap: 0.6rem; }
+  /* Compact left-column buttons — they rarely change, so users learn them and
+     they don't need to be large. */
+  .left-controls button { width: 100%; font-size: 0.85rem; padding: 0.32rem 0.4rem; }
+
+  /* Everything under the table is a single vertical stack at the table's width:
+     table on top, then the bid box, then the table chat. */
+  .table-stack { display: flex; flex-direction: column; align-items: stretch;
+                 gap: 0.8rem; width: fit-content; }
+  .table-stack #bidbox, .table-stack #status { max-width: none; margin: 0; }
   /* Undo matches the primary Redeal; Report is an outlined error-report control. */
   #undo-btn:disabled { opacity: 0.5; }
   #report-btn { background: #fff; color: var(--red); border: 2px solid var(--red); font-weight: 700; }
@@ -64,8 +76,8 @@
   .seat .seat-name { margin: auto 0 0; padding-top: 0.4rem; text-align: center; font-size: calc(1.2rem * var(--k)); }
   .seat-name.your-turn { background: #ffd24d; color: #5a4500; font-weight: 700;
                          border-radius: 6px; padding: 0.3rem 0.6rem; }
-  .seat .hand-suit { font-size: calc(1.1rem * var(--k)); justify-content: flex-start; white-space: nowrap; }
-  #slot-bottom .hand-suit { font-size: calc(1.5rem * var(--k)); }
+  .seat .hand-suit { font-size: calc(1.45rem * var(--k)); justify-content: flex-start; white-space: nowrap; }
+  #slot-bottom .hand-suit { font-size: calc(1.95rem * var(--k)); }
   .hand-wrap { width: fit-content; margin: 0 auto; }
   .seat-name .hcp { color: var(--accent); font-weight: 700; }
   #contract-display .contract-line-main { font-size: calc(2.2rem * var(--k)); }
@@ -77,15 +89,15 @@
   .pcard-row + .pcard-row { margin-top: calc(0.16rem * var(--k)); }
   /* Each "card" is just the clipped upper-left corner: rank over suit pip, on a
      short white tile — no wasted white space. Rank is bigger than the pip. */
-  .pcard { display: inline-block; flex: none; width: calc(1.75rem * var(--k));
+  .pcard { display: inline-block; flex: none; width: calc(2.2rem * var(--k));
            border: 1px solid #999; border-radius: calc(0.2rem * var(--k));
            background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
            padding: calc(0.1rem * var(--k)) 0 calc(0.3rem * var(--k)) calc(0.18rem * var(--k));
            line-height: 0.95; text-align: left; }
   .pcard + .pcard { margin-left: calc(-0.15rem * var(--k)); }   /* slight fan overlap */
-  .pcard .rank { display: block; font-weight: 700; font-size: calc(1.2rem * var(--k));
+  .pcard .rank { display: block; font-weight: 700; font-size: calc(1.55rem * var(--k));
                  font-variant-numeric: tabular-nums; }
-  .pcard .pip { display: block; font-size: calc(0.82rem * var(--k)); margin-top: calc(0.16rem * var(--k)); }
+  .pcard .pip { display: block; font-size: calc(1.05rem * var(--k)); margin-top: calc(0.16rem * var(--k)); }
 
   /* In pictures mode the central table stays narrow while You/Claude become
      wide fanned rows that span (and can extend past) the table — like BBO. */
@@ -180,6 +192,12 @@
   #board-badge .bb-d.s { bottom: 1px; left: 50%; transform: translateX(-50%); }
   #board-badge .bb-d.e { right: 3px; top: 50%; transform: translateY(-50%); }
   #board-badge .bb-d.w { left: 3px; top: 50%; transform: translateY(-50%); }
+  /* Thin black diagonals from each outer corner to the matching inner-square
+     corner — the classic bridge hand-diagram look. SVG overlay sits above the
+     coloured diamond but below the centre number (which has its own background). */
+  #board-badge .bb-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #board-badge .bb-lines line { stroke: #000; stroke-width: 1; vector-effect: non-scaling-stroke; }
+  #board-badge .bb-center { z-index: 1; }
 
   /* Contract is a square the width of the board badge (84px); N/S tricks sit
      directly below it (same width); E/W tricks to its left, the badge's height. */
@@ -195,6 +213,21 @@
     flex-direction: column; align-items: center; justify-content: center;
     line-height: 1.1; font-weight: 700; font-size: 1.7rem; }
   #contract-tricks .ct-contract .ct-decl { font-size: 1.2rem; font-weight: 700; margin-top: 0.5rem; }
+
+  /* Table chat (UI scaffold only — networking comes later). Sits at the bottom
+     of the table stack; the log scrolls when messages overflow. */
+  #table-chat { display: flex; flex-direction: column; gap: 0.5rem; }
+  #table-chat .tc-head { font-weight: 700; color: var(--accent); font-size: 1.05rem; }
+  #table-chat .tc-log { min-height: 120px; max-height: 240px; overflow-y: auto;
+    border: 1px solid var(--rule); border-radius: 8px; padding: 0.5rem 0.6rem;
+    background: #fbfaf7; display: flex; flex-direction: column; gap: 0.4rem; }
+  #table-chat .tc-empty { color: var(--muted); font-style: italic; }
+  #table-chat .tc-input-row { display: flex; gap: 0.4rem; }
+  #table-chat .tc-input-row input { flex: 1; padding: 0.45rem 0.6rem; font-size: 1rem;
+    border: 1px solid var(--rule); border-radius: 7px; }
+  #table-chat .tc-input-row button { padding: 0.45rem 0.9rem; font-weight: 700; }
+  #table-chat .tc-input-row input:disabled,
+  #table-chat .tc-input-row button:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .err { color: var(--red); font-weight: 600; }
 </style>
@@ -247,30 +280,45 @@
             <button id="report-btn" title="Report a problem with this deal or the bidding">🚩 Report</button>
           </div>
         </div>
-        <div class="card" id="table-panel">
-          <div id="table-grid">
-            <div id="contract-display"></div>
-            <div id="slot-top" class="seat"></div>
-            <div id="slot-left" class="seat"></div>
-            <div id="center"></div>
-            <div id="slot-right" class="seat"></div>
-            <div id="below-table-row"></div>
-            <div id="slot-bottom" class="seat"></div>
+        <div class="table-stack">
+          <div class="card" id="table-panel">
+            <div id="table-grid">
+              <div id="contract-display"></div>
+              <div id="slot-top" class="seat"></div>
+              <div id="slot-left" class="seat"></div>
+              <div id="center"></div>
+              <div id="slot-right" class="seat"></div>
+              <div id="below-table-row"></div>
+              <div id="slot-bottom" class="seat"></div>
+            </div>
+          </div>
+
+          <div id="show-compare-wrap">
+            <button id="show-compare-btn" hidden>Show BBA comparison</button>
+          </div>
+
+          <div class="card" id="bidbox" hidden>
+            <div class="bidbox-prompt">Your call:</div>
+            <div class="bidrow" id="bidrow1"></div>
+            <div class="bidrow" id="bidrow2"></div>
+          </div>
+
+          <div class="card" id="status" hidden><span class="thinking" id="status-text"></span></div>
+
+          <!-- Table chat: UI scaffold only. Will later become a live chat between
+               two people playing the table together; no networking yet. -->
+          <div class="card" id="table-chat">
+            <div class="tc-head">Table chat</div>
+            <div class="tc-log" id="tc-log">
+              <div class="tc-empty">No messages yet — chat with the person you're playing with here.</div>
+            </div>
+            <div class="tc-input-row">
+              <input id="tc-input" type="text" placeholder="Chat coming soon…" autocomplete="off" disabled>
+              <button id="tc-send" disabled title="Coming soon">Send</button>
+            </div>
           </div>
         </div>
       </div>
-
-      <div id="show-compare-wrap">
-        <button id="show-compare-btn" hidden>Show BBA comparison</button>
-      </div>
-
-      <div class="card" id="bidbox" hidden>
-        <div class="bidbox-prompt">Your call:</div>
-        <div class="bidrow" id="bidrow1"></div>
-        <div class="bidrow" id="bidrow2"></div>
-      </div>
-
-      <div class="card" id="status" hidden><span class="thinking" id="status-text"></span></div>
 
       <div id="page-err" class="err" hidden></div>
     </div>
