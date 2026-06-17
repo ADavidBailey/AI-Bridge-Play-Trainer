@@ -25,9 +25,6 @@ let comparePos = null;
 let cardsMode = false;
 // Show ten as "T" (J T 9) instead of "10" (J 10 9).
 let tenAsT = false;
-// Which scenario's authored chat has been seeded into #table-chat (so we seed
-// once per scenario, not on every re-render or same-scenario Redeal).
-let chatScenario = null;
 
 // Design scale for the table — the single "zoom knob" for the whole /bid UI.
 // fitTable() renders at exactly this scale on any window wide enough to fit it,
@@ -163,8 +160,7 @@ async function deal() {
   try {
     const data = await api("POST", "/api/bid/session", { scenario: currentScenario, board_index: null, rotate: rotateMode });
     sessionId = data.session_id;
-    render(data.state);
-    seedScenarioChat(data.state);   // load this scenario's authored chat into #table-chat
+    render(data.state);             // scenario coaching now renders in the right-side panel (renderChat)
     await runSteps();
   } catch (e) { showErr("Couldn't deal: " + e.message); }
 }
@@ -327,8 +323,17 @@ function appendColoredSuits(node, text) {
 function renderChat(state) {
   const chat = $("chat");
   chat.innerHTML = "";
+  // Scenario teaching prose (from the .btn @chat) lives at the top of the
+  // right-side Coaching panel — not in the Table chat. Refreshes per render,
+  // so it updates when you switch scenarios.
+  for (const text of (state.chat || [])) {
+    const m = el("div", { class: "chat-msg coach" });
+    m.append(el("span", { class: "who" }, "Coach"));
+    appendColoredSuits(m, text);
+    chat.append(m);
+  }
   const msgs = state.calls.filter((c) => c.seat === "N" && c.reason);
-  if (!msgs.length && !(state.complete && state.review)) {
+  if (!(state.chat || []).length && !msgs.length && !(state.complete && state.review)) {
     chat.append(el("div", { class: "chat-empty" }, "Your partner's thinking will appear here as the auction goes."));
     return;
   }
@@ -721,23 +726,6 @@ $("tc-form").addEventListener("submit", (ev) => {
   input.value = "";
   input.focus();
 });
-
-// Seed the scenario's authored chat (state.chat, from btn/<scenario>.btn) into
-// the panel. Done once per scenario: switching scenarios clears and re-seeds;
-// a same-scenario Redeal keeps the existing thread (incl. user messages).
-function seedScenarioChat(state) {
-  if (!state || state.scenario === chatScenario) return;
-  chatScenario = state.scenario;
-  const log = $("tc-log");
-  log.innerHTML = "";
-  const lines = state.chat || [];
-  if (!lines.length) {
-    log.append(el("div", { class: "tc-empty" },
-      "No messages yet — chat with the person you're playing with here."));
-    return;
-  }
-  for (const text of lines) appendTableChat(text, "Coach");
-}
 
 // BBA-comparison pop-up wiring.
 // ---- Options modal ----
