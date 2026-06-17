@@ -9,6 +9,10 @@
   #layout { grid-template-columns: 1fr 30%; }   /* wider Coaching side panel (D) */
   #layout > main { grid-column: 1; grid-row: 1; }
   #layout > #sidebar { grid-column: 2; grid-row: 1; }
+  /* Tighter top: compact header + less gap to the table (no wasted space). */
+  header { padding: 0.35rem 1.5rem; }
+  #sidebar { margin-top: 0.5rem; }
+  .table-row { min-height: calc(100vh - 90px); }
 
   /* --k scales the whole table in lockstep (set by fitTable() in bid.js,
      clamped to a readable floor and a sensible cap). 1 = today's size. */
@@ -262,8 +266,10 @@
   /* Auction-end "Play / Review" button (F). */
   #play-review-wrap { text-align: center; margin: 0.4rem 0; }
   #play-review-btn { font-size: 1.3rem; padding: 0.6rem 1.6rem; }
-  /* Spinner beside the seat that's currently thinking/bidding (C). */
-  .seat-spinner { display: inline-block; width: 0.85em; height: 0.85em; margin-right: 0.4em;
+  /* Fixed-width name field, so the spinner to its right is always in one spot. */
+  .seat-name-text { display: inline-block; min-width: 4.5em; text-align: center; }
+  /* Spinner to the RIGHT of the seat name when it's that seat's turn (C). */
+  .seat-spinner { display: inline-block; width: 0.85em; height: 0.85em; margin-left: 0.4em;
     vertical-align: -0.1em; border: 2px solid var(--rule); border-top-color: var(--accent);
     border-radius: 50%; animation: seat-spin 0.7s linear infinite; }
   @keyframes seat-spin { to { transform: rotate(360deg); } }

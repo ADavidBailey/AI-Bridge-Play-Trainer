@@ -229,7 +229,9 @@ function faceDown(slot, role) {
   for (let i = 0; i < 13; i++) row.append(el("div", { class: "cardback" }));
   wrap.append(row);
   slot.append(wrap);
-  slot.append(el("div", { class: "seat-name" }, role));
+  // Name sits in a fixed-width field so the thinking spinner (added to its
+  // right in render) always lands in the same spot regardless of name length.
+  slot.append(el("div", { class: "seat-name" }, el("span", { class: "seat-name-text" }, role)));
 }
 
 // One clipped card corner: rank (bigger) over suit pip, colored via .suit-*.
@@ -559,7 +561,7 @@ function render(state) {
   // thinking/bidding — so "who's working" shows at the seat, not over the selector.
   if (!state.complete && !state.user_to_play && SEAT_SLOT[state.to_play]) {
     const plate = document.querySelector(`#${SEAT_SLOT[state.to_play]} .seat-name`);
-    if (plate) plate.insertAdjacentHTML("afterbegin", '<span class="seat-spinner" aria-hidden="true"></span>');
+    if (plate) plate.insertAdjacentHTML("beforeend", '<span class="seat-spinner" aria-hidden="true"></span>');
   }
 
   const center = $("center"); center.innerHTML = "";
