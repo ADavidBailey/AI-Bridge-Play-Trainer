@@ -160,7 +160,8 @@ async function deal() {
   try {
     const data = await api("POST", "/api/bid/session", { scenario: currentScenario, board_index: null, rotate: rotateMode });
     sessionId = data.session_id;
-    render(data.state);             // scenario coaching now renders in the right-side panel (renderChat)
+    render(data.state);
+    seedScenarioChat(data.state);   // scenario chat (@chat) → Table chat, top
     await runSteps();
   } catch (e) { showErr("Couldn't deal: " + e.message); }
 }
@@ -323,17 +324,10 @@ function appendColoredSuits(node, text) {
 function renderChat(state) {
   const chat = $("chat");
   chat.innerHTML = "";
-  // Scenario teaching prose (from the .btn @chat) lives at the top of the
-  // right-side Coaching panel — not in the Table chat. Refreshes per render,
-  // so it updates when you switch scenarios.
-  for (const text of (state.chat || [])) {
-    const m = el("div", { class: "chat-msg coach" });
-    m.append(el("span", { class: "who" }, "Coach"));
-    appendColoredSuits(m, text);
-    chat.append(m);
-  }
+  // Coaching panel = Claude's per-bid reasoning. (The scenario chat / @chat goes
+  // in the Table chat; the deal-specific .pbn coaching will join this panel later.)
   const msgs = state.calls.filter((c) => c.seat === "N" && c.reason);
-  if (!(state.chat || []).length && !msgs.length && !(state.complete && state.review)) {
+  if (!msgs.length && !(state.complete && state.review)) {
     chat.append(el("div", { class: "chat-empty" }, "Your partner's thinking will appear here as the auction goes."));
     return;
   }
@@ -726,6 +720,24 @@ $("tc-form").addEventListener("submit", (ev) => {
   input.value = "";
   input.focus();
 });
+
+// Seed the scenario chat (the .btn @chat — the agreement/topic) at the top of the
+// Table chat, once per scenario. Switching scenarios clears + re-seeds; human
+// messages then append below it (newest at the bottom).
+let chatScenario = null;
+function seedScenarioChat(state) {
+  if (!state || state.scenario === chatScenario) return;
+  chatScenario = state.scenario;
+  const log = $("tc-log");
+  log.innerHTML = "";
+  const lines = state.chat || [];
+  if (!lines.length) {
+    log.append(el("div", { class: "tc-empty" },
+      "No messages yet — chat with the person you're playing with here."));
+    return;
+  }
+  for (const text of lines) appendTableChat(text, "Scenario");
+}
 
 // BBA-comparison pop-up wiring.
 // ---- Options modal ----
