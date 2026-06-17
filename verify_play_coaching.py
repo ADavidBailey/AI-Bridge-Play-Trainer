@@ -17,6 +17,7 @@ PLAY_SCENARIOS = [
     "Side_Suit_Ruff_Before_Trump", "Rabbis_Rule", "Endplay_3rd_Round_Strip",
 ]
 HONORS = {"T", "J", "Q", "K", "A"}      # a tie by one of these threatens WHY honesty
+RANK_ORDER = "23456789TJQKA"            # low -> high, for the "tying card outranks authored" test
 
 
 def _pbn(suit, rank):                    # (Denom, Rank) -> "HQ"
@@ -44,16 +45,22 @@ def classify(sess, dec):
     accept = {want} | {(server.SUIT_FROM_CHAR[a["suit"]], server.RANK_FROM_CHAR[a["rank"]])
                        for a in dec.get("accept", [])}
     ties = [k for k, v in vals.items() if v == qv and k not in accept]
-    honor_ties = [k for k in ties if k[1].abbr in HONORS]
-    spot_ties = [k for k in ties if k[1].abbr not in HONORS]
-    if honor_ties:
-        names = ", ".join(f"{_pbn(*k)}={qv}" for k in honor_ties)
+    # A tie is NON-TRIVIAL if it could be the card a WHY warns against: an honor
+    # (T-A), or any card ranked ABOVE the authored one (a 'top spot' counts). Those
+    # make a contrasting WHY DD-false -> QUARANTINE. A low spot below the authored
+    # card is trivial -> KEEP and recommend it as +ACCEPT (never ding a correct play).
+    # To RELAX over-drop later: drop the RANK_ORDER clause, keep the honor clause.
+    wo = RANK_ORDER.index(want[1].abbr)
+    block = [k for k in ties if k[1].abbr in HONORS or RANK_ORDER.index(k[1].abbr) > wo]
+    trivial = [k for k in ties if k not in block]
+    if block:
+        names = ", ".join(f"{_pbn(*k)}={qv}" for k in block)
         return ("QUARANTINE",
-                f"reach OK; {wstr}={qv} ties honor {names}: a WHY contrasting it would be "
-                f"DD-false (b31 trap)", [])
-    rec = sorted(_pbn(*k) for k in spot_ties)
-    note = f"; co-correct spot(s) -> +ACCEPT {rec}" if rec else ""
-    return "KEEP", f"reach OK; {wstr}={qv} strictly best over honors (next {max(worse)}){note}", rec
+                f"reach OK; {wstr}={qv} tied by non-trivial {names}: a WHY contrasting it "
+                f"would be DD-false (b31 trap)", [])
+    rec = sorted(_pbn(*k) for k in trivial)
+    note = f"; co-correct low spot(s) -> +ACCEPT {rec}" if rec else ""
+    return "KEEP", f"reach OK; {wstr}={qv} strictly best over honors/highs (next {max(worse)}){note}", rec
 
 
 def verify_scenario(scenario):
