@@ -4,7 +4,8 @@ each scenario via the trainer engine and screens every [PLAY] decision for
 reachability + DD-soundness. Emits the AUTHOR->GATE->PROMOTE verdict (PBS-6).
   python3 verify_play_coaching.py [scenarios...]   human summary (+detail if named)
   python3 verify_play_coaching.py --json           flat verdict array to stdout
-  python3 verify_play_coaching.py --write-verdicts  per-scenario json to .work/"""
+  python3 verify_play_coaching.py --write-verdicts  per-scenario json to .work/
+  python3 verify_play_coaching.py <scn> --diff      diff my authored tuples vs PBS candidates"""
 import sys, json
 from pathlib import Path
 import server
@@ -134,6 +135,29 @@ def write_verdicts(reports):
         print(f"wrote {target}  ({len(decs)} decisions)")
 
 
+def diff_candidates(reports):
+    """Cross-check identity tuples (board,trick,seat,card): my gate's AUTHORED
+    [PLAY] decisions vs PBS's dd_line candidate sidecar. Both wrap the same DDS, so
+    they SHOULD agree -> this catches WRAPPER/pipeline bugs, not bridge-fact errors.
+    An authored tuple absent from candidates is the divergence that parks needs-David."""
+    for rep in reports:
+        scn = rep["scenario"]
+        path = server._scenario_pbn_path(scn)
+        cf = path.parent / ".work" / f"{scn}-play-candidates.json" if path else None
+        if cf is None or not cf.exists():
+            print(f"=== {scn}: no candidates sidecar ({cf}) ===")
+            continue
+        cand = {(c["board"], c["trick"], c["seat"], c["card"]) for c in json.loads(cf.read_text())}
+        gate = {(d["board"], d["trick"], d["seat"], d["card"])
+                for b in rep["boards"] for d in b["decisions"]}
+        both, only_gate, only_cand = gate & cand, gate - cand, cand - gate
+        print(f"=== {scn}: diff gate(authored) vs candidates ===")
+        print(f"  authored: {len(gate)}   candidates: {len(cand)}   in both: {len(both)}")
+        print(f"  only in gate (authored, NOT a candidate) -> REVIEW: {sorted(only_gate) or 'none'}")
+        print(f"  only in candidates (proposed, not yet authored): {len(only_cand)}")
+        print(f"  -> {'DIVERGENCE (needs David)' if only_gate else 'clean: wrappers agree on every authored tuple'}")
+
+
 def summarize(reports):
     tally = {"KEEP": 0, "DROP": 0, "QUARANTINE": 0}
     bstat = {"quizzed": 0, "tips-only": 0, "load-skip": 0}
@@ -177,6 +201,8 @@ if __name__ == "__main__":
         print(json.dumps(flat(reports), indent=2))
     elif "--write-verdicts" in flags:
         write_verdicts(reports)
+    elif "--diff" in flags:
+        diff_candidates(reports)
     else:
         summarize(reports)
         if named:
