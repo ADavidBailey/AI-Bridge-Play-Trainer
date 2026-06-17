@@ -1686,6 +1686,7 @@ class BidSession:
         self.bba_input = pb.write_bba_input(deal_pbn, self.dealer, vul)
         self.calls: list[str] = []
         self.meta: list[dict] = []          # parallel to calls: {seat, call, engine, reason}
+        self._call_cache: dict = {}         # auction-prefix -> (call, engine, reason); skips re-asking after Undo
         self.client = _anthropic_client()
         self.review: str | None = None
         self.bba_compare: list[str] | None = None
@@ -1718,27 +1719,40 @@ class BidSession:
         seat = pb.seat_at(self.dealer_idx, len(self.calls))
         if seat == self.user_seat:
             return
-        t0 = time.perf_counter()
-        if seat == self.partner_seat and self.client is not None:
-            legal = pb.legal_calls(self.calls, self.dealer_idx)
-            partner_hand = hand_of(self.deal, LETTER_SEAT[self.partner_seat])
-            try:
-                call, reason = pb.claude_next_call(self.client, partner_hand,
-                                                   self.calls, self.dealer, self.vul, legal)
-                self._record(self.partner_seat, call, "Claude", reason)
-            except Exception as e:
-                # A transient Claude/API hiccup shouldn't dead-end the auction —
-                # fall back to the BBA engine for this one call so bidding finishes.
-                print(f"[bid] Claude call failed ({e!r}); falling back to BBA", flush=True)
-                call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
-                self._record(self.partner_seat, call, "Claude (BBA fallback — Claude unavailable)", "")
+        key = tuple(self.calls)
+        cached = self._call_cache.get(key)
+        if cached is not None:
+            # We've already produced the call for this exact auction (e.g. after
+            # an Undo + rebid). Serve it instantly instead of re-asking Claude or
+            # BBA — same input, same call, no API/subprocess round-trip.
+            call, engine, reason = cached
+            self._record(seat, call, engine, reason)
+            self.meta[-1]["ms"] = 0
+            print(f"[bid-timing] {seat} {engine.split()[0]} {call}: cached", flush=True)
         else:
-            call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
-            engine = "Claude (BBA stub — no API key)" if seat == self.partner_seat else "Robot (BBA)"
-            self._record(seat, call, engine, "")
-        ms = round((time.perf_counter() - t0) * 1000)
-        self.meta[-1]["ms"] = ms
-        print(f"[bid-timing] {seat} {self.meta[-1]['engine'].split()[0]} {call}: {ms} ms", flush=True)
+            t0 = time.perf_counter()
+            if seat == self.partner_seat and self.client is not None:
+                legal = pb.legal_calls(self.calls, self.dealer_idx)
+                partner_hand = hand_of(self.deal, LETTER_SEAT[self.partner_seat])
+                try:
+                    call, reason = pb.claude_next_call(self.client, partner_hand,
+                                                       self.calls, self.dealer, self.vul, legal)
+                    self._record(self.partner_seat, call, "Claude", reason)
+                except Exception as e:
+                    # A transient Claude/API hiccup shouldn't dead-end the auction —
+                    # fall back to the BBA engine for this one call so bidding finishes.
+                    print(f"[bid] Claude call failed ({e!r}); falling back to BBA", flush=True)
+                    call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
+                    self._record(self.partner_seat, call, "Claude (BBA fallback — Claude unavailable)", "")
+            else:
+                call = pb.bba_next_call(self.bba_input, self.cc, self.cc, self.calls)
+                engine = "Claude (BBA stub — no API key)" if seat == self.partner_seat else "Robot (BBA)"
+                self._record(seat, call, engine, "")
+            ms = round((time.perf_counter() - t0) * 1000)
+            m = self.meta[-1]
+            m["ms"] = ms
+            self._call_cache[key] = (m["call"], m["engine"], m["reason"])
+            print(f"[bid-timing] {seat} {m['engine'].split()[0]} {call}: {ms} ms", flush=True)
         if pb.auction_over(self.calls):
             self._finalize()
 
