@@ -324,10 +324,18 @@ function appendColoredSuits(node, text) {
 function renderChat(state) {
   const chat = $("chat");
   chat.innerHTML = "";
-  // Coaching panel = Claude's per-bid reasoning. (The scenario chat / @chat goes
-  // in the Table chat; the deal-specific .pbn coaching will join this panel later.)
+  // Deal-specific coaching from the scenario .pbn (the "actions") at the top of
+  // the Coaching panel; Claude's per-bid reasoning follows. (Scenario chat /
+  // @chat lives in the Table chat.)
+  for (const chunk of (state.coaching || [])) {
+    if (!chunk || !chunk.text) continue;
+    const m = el("div", { class: "chat-msg coach" });
+    m.append(el("span", { class: "who" }, "Coach"));
+    appendColoredSuits(m, chunk.text);
+    chat.append(m);
+  }
   const msgs = state.calls.filter((c) => c.seat === "N" && c.reason);
-  if (!msgs.length && !(state.complete && state.review)) {
+  if (!(state.coaching || []).length && !msgs.length && !(state.complete && state.review)) {
     chat.append(el("div", { class: "chat-empty" }, "Your partner's thinking will appear here as the auction goes."));
     return;
   }

@@ -1681,6 +1681,27 @@ class BidSession:
         self.partner_seat = "S" if self.user_seat == "N" else "N"
         # Shift that maps the user's real seat to South in the display frame.
         self._shift = (pb.SEATS.index("S") - pb.SEATS.index(self.user_seat)) % 4
+
+        # Per-deal coaching prose — the {...} block in this board's scenario .pbn,
+        # parsed with the same helper the play trainer uses. Shown in the Coaching
+        # panel. None for scenarios with no authored coaching (e.g. the play
+        # scenarios until PBS authors them). Same file + idx as load_board.
+        self.coaching = None
+        try:
+            _p = pb._scenario_path(scenario)
+            if _p is not None:
+                _slices = _split_pbn_by_board(_p.read_text())
+                if idx < len(_slices):
+                    self.coaching = parse_coaching(_slices[idx], _auction_pbn_calls(board.auction))
+                # Resolve @S/@your/@v(base|third) per chunk: second-person when the
+                # chunk's call is the user's (You), third-person when it's partner's.
+                for _ch in (self.coaching or []):
+                    _bi = _ch.get("bid_index")
+                    _is_user = (pb.seat_at(self.dealer_idx, _bi) == self.user_seat) if isinstance(_bi, int) else True
+                    _ch["text"] = fill_pronouns(_ch.get("text", ""), _is_user)
+        except Exception as _e:
+            print(f"[bid] coaching parse failed for {scenario}: {_e!r}", flush=True)
+            self.coaching = None
         self.vul = vul
         self.cc = str(pb.DEFAULT_CC)
         self.bba_input = pb.write_bba_input(deal_pbn, self.dealer, vul)
@@ -1848,6 +1869,7 @@ class BidSession:
             "complete": over,
             "has_claude": self.client is not None,
             "rotate": self.rotate,
+            "coaching": self.coaching,
         }
         if over:
             contract = pb.final_contract(self.calls, self.dealer_idx) or "Passed out"
