@@ -621,6 +621,13 @@ button.primary:hover { background: #16456a; }
   justify-content: space-between;
   align-items: center;
 }
+/* Small link to switch between the bidding screen (/bid) and the play trainer (/). */
+.screen-link {
+  font-size: 0.95rem; font-weight: 700; color: var(--accent); text-decoration: none;
+  border: 1px solid var(--accent); border-radius: 7px; padding: 0.3rem 0.7rem; white-space: nowrap;
+}
+.screen-link:hover { background: var(--accent-soft); }
+#header-right { display: flex; align-items: center; gap: 0.9rem; }
 #settings-btn {
   font-size: 1.6rem;
   padding: 0.2rem 0.7rem;

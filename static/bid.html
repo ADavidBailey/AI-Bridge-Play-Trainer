@@ -57,11 +57,11 @@
                column-gap: 1rem; row-gap: 0.8rem; min-height: calc(100vh - 150px); }
   /* The wrapper dissolves so lc-top / lc-bottom become grid items themselves. */
   .left-controls { display: contents; }
-  .lc-top    { grid-column: 1; grid-row: 1; justify-self: end; width: 120px;
+  .lc-top    { grid-column: 1; grid-row: 1; justify-self: start; width: 120px;
                display: flex; flex-direction: column; align-items: center; gap: 1.1rem; }
   /* lc-bottom spans down so the left column stays full-height; its content sits
      at the top (aligned with the bid box below the table). */
-  .lc-bottom { grid-column: 1; grid-row: 2 / 4; justify-self: end; align-self: start; width: 120px;
+  .lc-bottom { grid-column: 1; grid-row: 2 / 4; justify-self: start; align-self: start; width: 120px;
                display: flex; flex-direction: column; gap: 0.6rem; }
   #table-panel { grid-column: 2; grid-row: 1; }
   .below-stack { grid-column: 2; grid-row: 2; align-self: start;
@@ -294,6 +294,7 @@
       <h1>Bidding with Claude</h1>
       <span id="header-meta" class="header-meta"></span>
     </div>
+    <a class="screen-link" href="/" title="Switch to the play trainer (play hands out)">Play hands →</a>
   </div>
 </header>
 
